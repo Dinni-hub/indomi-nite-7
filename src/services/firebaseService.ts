@@ -1,5 +1,6 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase } from "firebase/database";
+import { getAuth } from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -12,16 +13,17 @@ const firebaseConfig = {
 };
 
 // Check if config is valid (not placeholders and not empty)
-const isConfigValid = 
-  firebaseConfig.apiKey && 
+export const isFirebaseConfigured = 
+  !!firebaseConfig.apiKey && 
   firebaseConfig.apiKey !== 'YOUR_FIREBASE_API_KEY' &&
   firebaseConfig.apiKey.length > 10 &&
-  firebaseConfig.appId &&
-  firebaseConfig.appId !== 'YOUR_FIREBASE_APP_ID';
+  !!firebaseConfig.appId &&
+  !!firebaseConfig.authDomain &&
+  !!firebaseConfig.projectId;
 
 // Initialize Firebase with a fallback to avoid crashing if config is invalid
 // but still provide a database object that won't throw immediately on 'ref()'
-const app = (isConfigValid || getApps().length > 0) 
+const app = (isFirebaseConfigured || getApps().length > 0) 
   ? (getApps().length === 0 ? initializeApp(firebaseConfig) : getApp())
   : initializeApp({
       apiKey: "dummy-key",
@@ -32,8 +34,9 @@ const app = (isConfigValid || getApps().length > 0)
       appId: "1:000000000000:web:0000000000000000000000"
     });
 
-// Export database
+// Export database and auth
 export const database = getDatabase(app);
+export const auth = getAuth(app);
 
 // Analytics is disabled to prevent "Installations: Create Installation request failed" errors
 // which occur when invalid/placeholder keys are used with the Analytics SDK.

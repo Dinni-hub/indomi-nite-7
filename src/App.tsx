@@ -8,8 +8,9 @@ import { motion, AnimatePresence } from "motion/react";
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend 
 } from 'recharts';
-import { database } from "./services/firebaseService";
-import { ref, onValue, push, set, update } from "firebase/database";
+import { database, isFirebaseConfigured, auth } from "./services/firebaseService";
+import { ref, onValue, push, set, update, get } from "firebase/database";
+import { signInAnonymously } from "firebase/auth";
 import { 
   Bell, ChevronDown, Search, 
   SlidersHorizontal, Flame, Utensils, Soup, IceCream, 
@@ -79,24 +80,66 @@ export default function App() {
   }, [orders]);
   
   useEffect(() => {
-    const ordersRef = ref(database, 'orders');
-    const unsubscribe = onValue(ordersRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        const ordersArray = Object.keys(data).map(key => ({
-          ...data[key],
-          id: key,
-          timestamp: new Date(data[key].timestamp)
-        }));
-        setOrders(ordersArray.reverse());
-      } else {
-        setOrders([]);
+    if (isFirebaseConfigured) {
+      // Sign in anonymously to allow access to locked database
+      signInAnonymously(auth).catch((error) => {
+        console.error("Anonymous auth error:", error);
+        if (error.code === 'auth/configuration-not-found') {
+          setNotification("Error: Fitur 'Anonymous Sign-in' belum diaktifkan di Firebase Console.");
+        } else {
+          setNotification(`Gagal masuk ke Firebase: ${error.message}`);
+        }
+      });
+
+      const ordersRef = ref(database, 'orders');
+      const unsubscribe = onValue(ordersRef, (snapshot) => {
+        const data = snapshot.val();
+        if (data) {
+          const ordersArray = Object.keys(data).map(key => ({
+            ...data[key],
+            id: key,
+            timestamp: new Date(data[key].timestamp)
+          }));
+          setOrders(ordersArray.reverse());
+        } else {
+          setOrders([]);
+        }
+      }, (error) => {
+        console.error("Firebase onValue error:", error);
+        setNotification("Gagal memuat data dari Firebase. Periksa koneksi atau konfigurasi.");
+      });
+
+      // Sync Inventory from Firebase
+      const inventoryRef = ref(database, 'inventory');
+      onValue(inventoryRef, (snapshot) => {
+        const data = snapshot.val();
+        if (data) {
+          setInventory(data);
+        }
+      });
+
+      return () => unsubscribe();
+    } else {
+      // Fallback to LocalStorage for demo purposes
+      const localOrders = localStorage.getItem('indominite_orders');
+      if (localOrders) {
+        try {
+          const parsed = JSON.parse(localOrders);
+          setOrders(parsed.map((o: any) => ({ ...o, timestamp: new Date(o.timestamp) })).reverse());
+        } catch (e) {
+          console.error("Error parsing local orders", e);
+        }
       }
-    }, (error) => {
-      console.error("Firebase onValue error:", error);
-      setNotification("Gagal memuat data dari Firebase. Periksa koneksi atau konfigurasi.");
-    });
-    return () => unsubscribe();
+
+      const localInventory = localStorage.getItem('indominite_inventory');
+      if (localInventory) {
+        try {
+          setInventory(JSON.parse(localInventory));
+        } catch (e) {
+          console.error("Error parsing local inventory", e);
+        }
+      }
+    }
   }, []);
 
   const [inventory, setInventory] = useState([
@@ -214,11 +257,16 @@ export default function App() {
       paymentStatus: 'belum'
     };
     
-    const ordersRef = ref(database, 'orders');
-    const newOrderRef = push(ordersRef, newOrder);
-    const orderId = newOrderRef.key;
+    const orderId = isFirebaseConfigured ? push(ref(database, 'orders'), newOrder).key : `local_${Date.now()}`;
+    
+    if (!isFirebaseConfigured) {
+      const localOrders = JSON.parse(localStorage.getItem('indominite_orders') || '[]');
+      const orderWithId = { ...newOrder, id: orderId };
+      const updatedLocalOrders = [...localOrders, orderWithId];
+      localStorage.setItem('indominite_orders', JSON.stringify(updatedLocalOrders));
+      setOrders(updatedLocalOrders.map((o: any) => ({ ...o, timestamp: new Date(o.timestamp) })).reverse());
+    }
 
-    // 2. Update Stats (Now handled by useMemo on orders)
     setActiveOrder({
       id: orderId || 'pending',
       startTime: Date.now(),
@@ -334,14 +382,28 @@ export default function App() {
             orders={orders}
             setOrders={setOrders}
             onUpdateStock={(id, newStock) => {
-              setInventory(inventory.map(item => 
+              const updatedInventory = inventory.map(item => 
                 item.id === id ? { ...item, stock: newStock } : item
-              ));
+              );
+              setInventory(updatedInventory);
+              
+              if (isFirebaseConfigured) {
+                set(ref(database, 'inventory'), updatedInventory);
+              } else {
+                localStorage.setItem('indominite_inventory', JSON.stringify(updatedInventory));
+              }
             }}
             onUpdateItem={(updatedItem) => {
-              setInventory(inventory.map(item => 
+              const updatedInventory = inventory.map(item => 
                 item.id === updatedItem.id ? updatedItem : item
-              ));
+              );
+              setInventory(updatedInventory);
+              
+              if (isFirebaseConfigured) {
+                set(ref(database, 'inventory'), updatedInventory);
+              } else {
+                localStorage.setItem('indominite_inventory', JSON.stringify(updatedInventory));
+              }
             }}
             onLogout={() => {
               setUserRole('guest');
@@ -351,9 +413,18 @@ export default function App() {
               setView('home');
             }}
             onUpdateOrderStatus={(orderId, status) => {
-              // Update Firebase
-              const orderRef = ref(database, `orders/${orderId}`);
-              update(orderRef, { status });
+              // Update Firebase or LocalStorage
+              if (isFirebaseConfigured) {
+                const orderRef = ref(database, `orders/${orderId}`);
+                update(orderRef, { status });
+              } else {
+                const localOrders = JSON.parse(localStorage.getItem('indominite_orders') || '[]');
+                const updatedLocalOrders = localOrders.map((o: any) => 
+                  o.id === orderId ? { ...o, status } : o
+                );
+                localStorage.setItem('indominite_orders', JSON.stringify(updatedLocalOrders));
+                setOrders(updatedLocalOrders.map((o: any) => ({ ...o, timestamp: new Date(o.timestamp) })).reverse());
+              }
               
               // Update active order if it matches
               if (activeOrder && activeOrder.id === orderId) {
@@ -627,11 +698,6 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
   const [editingItem, setEditingItem] = useState<any | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
 
-  const isFirebaseConfigured = useMemo(() => {
-    return !!import.meta.env.VITE_FIREBASE_API_KEY && 
-           import.meta.env.VITE_FIREBASE_API_KEY !== 'YOUR_FIREBASE_API_KEY';
-  }, []);
-
   // Icon mapping
   const IconMap: any = {
     Package, Soup, Egg, Flame, Leaf, Utensils, Box, Droplet, Sparkles, Coffee, Camera
@@ -904,8 +970,9 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
   return (
     <div className="flex flex-col h-full bg-[#F5F2EA] relative">
       {!isFirebaseConfigured && (
-        <div className="bg-red-500 text-white px-6 py-2 text-[10px] font-bold text-center uppercase tracking-widest z-50">
-          Firebase Belum Dikonfigurasi - Data Tidak Akan Tersimpan/Muncul
+        <div className="bg-red-500 text-white px-6 py-3 text-[10px] font-bold text-center uppercase tracking-widest z-50 shadow-lg">
+          <p className="mb-1">⚠️ Firebase Belum Dikonfigurasi</p>
+          <p className="opacity-80 normal-case font-medium">Data hanya tersimpan di perangkat ini (Local Storage). Untuk sinkronisasi antar perangkat (Owner & Pelanggan), silakan hubungkan Firebase API Key di Environment Variables.</p>
         </div>
       )}
       {/* Header */}
@@ -1292,9 +1359,9 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
                 <div>
                   <h3 className="font-bold text-[#3D2B1F]">Owner Account</h3>
                   <p className="text-xs text-[#3D2B1F]/60">indominite@gmail.com</p>
-                  <div className="flex items-center gap-1 mt-1 text-green-600 bg-green-50 px-2 py-0.5 rounded-full w-fit">
-                    <CheckCircle size={10} />
-                    <span className="text-[9px] font-bold">Terhubung & Sinkronisasi Otomatis</span>
+                  <div className={`flex items-center gap-1 mt-1 ${isFirebaseConfigured ? 'text-green-600 bg-green-50' : 'text-orange-600 bg-orange-50'} px-2 py-0.5 rounded-full w-fit`}>
+                    {isFirebaseConfigured ? <CheckCircle size={10} /> : <AlertTriangle size={10} />}
+                    <span className="text-[9px] font-bold">{isFirebaseConfigured ? 'Terhubung & Sinkronisasi Otomatis' : 'Mode Offline (Local Storage)'}</span>
                   </div>
                 </div>
               </div>
@@ -1314,6 +1381,25 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
               >
                 <LogOut size={20} /> Keluar
               </button>
+
+              {!isFirebaseConfigured && (
+                <div className="mt-6 p-4 bg-orange-50 rounded-2xl border border-orange-100">
+                  <h4 className="text-xs font-bold text-orange-800 mb-2 flex items-center gap-2">
+                    <AlertTriangle size={14} /> Cara Menghubungkan Firebase
+                  </h4>
+                  <p className="text-[10px] text-orange-700 leading-relaxed">
+                    Untuk sinkronisasi pesanan antar perangkat (Owner & Pelanggan), Anda perlu memasukkan Firebase API Key di Environment Variables:
+                  </p>
+                  <ul className="text-[9px] text-orange-600 mt-2 space-y-1 list-disc list-inside">
+                    <li>VITE_FIREBASE_API_KEY</li>
+                    <li>VITE_FIREBASE_APP_ID</li>
+                    <li>VITE_FIREBASE_PROJECT_ID</li>
+                  </ul>
+                  <p className="text-[9px] text-orange-700 mt-2 font-bold italic">
+                    Saat ini Anda berada dalam "Mode Offline" di mana data hanya tersimpan di browser ini.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         )}
