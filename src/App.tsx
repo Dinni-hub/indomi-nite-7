@@ -49,28 +49,45 @@ interface Order {
 }
 
 export default function App() {
-  const [view, setView] = useState<View>('welcome');
+  const [view, setView] = useState<View>(() => {
+    const saved = localStorage.getItem('indominite_view');
+    return (saved as View) || 'welcome';
+  });
   const [address, setAddress] = useState('');
   const [addresses, setAddresses] = useState<any[]>([]);
-  const [selectedItem, setSelectedItem] = useState<any>(null);
+  const [selectedItem, setSelectedItem] = useState<any>(() => {
+    const saved = localStorage.getItem('indominite_selectedItem');
+    return saved ? JSON.parse(saved) : null;
+  });
   const [activeOrder, setActiveOrder] = useState<{
     id: string;
     startTime: number;
     status: 'diterima' | 'dimasak' | 'diantar' | 'selesai';
     isExtended: boolean;
-  } | null>(null);
+  } | null>(() => {
+    const saved = localStorage.getItem('indominite_activeOrder');
+    return saved ? JSON.parse(saved) : null;
+  });
   const [notification, setNotification] = useState<string | null>(null);
-  const [homeActiveTab, setHomeActiveTab] = useState('home');
+  const [homeActiveTab, setHomeActiveTab] = useState(() => {
+    return localStorage.getItem('indominite_homeActiveTab') || 'home';
+  });
   const [homeActiveCategory, setHomeActiveCategory] = useState('Mie');
   const [homeSearchQuery, setHomeSearchQuery] = useState('');
-  const [cart, setCart] = useState<CartItem[]>([]);
+  const [cart, setCart] = useState<CartItem[]>(() => {
+    const saved = localStorage.getItem('indominite_cart');
+    return saved ? JSON.parse(saved) : [];
+  });
 
-  const [userRole, setUserRole] = useState<'guest' | 'customer' | 'owner'>('guest');
-  const [customerName, setCustomerName] = useState('');
-  const [customerPhone, setCustomerPhone] = useState('');
-  const [customerEmail, setCustomerEmail] = useState('');
-  const [customerAddress, setCustomerAddress] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState('Tunai');
+  const [userRole, setUserRole] = useState<'guest' | 'customer' | 'owner'>(() => {
+    const saved = localStorage.getItem('indominite_userRole');
+    return (saved as any) || 'guest';
+  });
+  const [customerName, setCustomerName] = useState(() => localStorage.getItem('indominite_customerName') || '');
+  const [customerPhone, setCustomerPhone] = useState(() => localStorage.getItem('indominite_customerPhone') || '');
+  const [customerEmail, setCustomerEmail] = useState(() => localStorage.getItem('indominite_customerEmail') || '');
+  const [customerAddress, setCustomerAddress] = useState(() => localStorage.getItem('indominite_customerAddress') || '');
+  const [paymentMethod, setPaymentMethod] = useState(() => localStorage.getItem('indominite_paymentMethod') || 'Tunai');
   const [orders, setOrders] = useState<Order[]>([]);
   
   // Calculate stats from orders
@@ -141,6 +158,59 @@ export default function App() {
       }
     }
   }, []);
+
+  // Persist state to localStorage
+  useEffect(() => {
+    localStorage.setItem('indominite_view', view);
+  }, [view]);
+
+  useEffect(() => {
+    localStorage.setItem('indominite_cart', JSON.stringify(cart));
+  }, [cart]);
+
+  useEffect(() => {
+    localStorage.setItem('indominite_userRole', userRole);
+  }, [userRole]);
+
+  useEffect(() => {
+    localStorage.setItem('indominite_customerName', customerName);
+  }, [customerName]);
+
+  useEffect(() => {
+    localStorage.setItem('indominite_customerPhone', customerPhone);
+  }, [customerPhone]);
+
+  useEffect(() => {
+    localStorage.setItem('indominite_customerEmail', customerEmail);
+  }, [customerEmail]);
+
+  useEffect(() => {
+    localStorage.setItem('indominite_customerAddress', customerAddress);
+  }, [customerAddress]);
+
+  useEffect(() => {
+    localStorage.setItem('indominite_paymentMethod', paymentMethod);
+  }, [paymentMethod]);
+
+  useEffect(() => {
+    localStorage.setItem('indominite_homeActiveTab', homeActiveTab);
+  }, [homeActiveTab]);
+
+  useEffect(() => {
+    if (selectedItem) {
+      localStorage.setItem('indominite_selectedItem', JSON.stringify(selectedItem));
+    } else {
+      localStorage.removeItem('indominite_selectedItem');
+    }
+  }, [selectedItem]);
+
+  useEffect(() => {
+    if (activeOrder) {
+      localStorage.setItem('indominite_activeOrder', JSON.stringify(activeOrder));
+    } else {
+      localStorage.removeItem('indominite_activeOrder');
+    }
+  }, [activeOrder]);
 
   const [inventory, setInventory] = useState([
     { 
@@ -692,11 +762,17 @@ function LoginScreen({ onLogin }: { onLogin: (role: 'customer' | 'owner', name: 
 }
 
 function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateStock, onUpdateItem, onLogout, onSwitchToCustomer, onUpdateOrderStatus, setOrders }: { inventory: any[], totalRevenue: number, totalOrders: number, orders: Order[], onUpdateStock: (id: number, stock: number) => void, onUpdateItem: (item: any) => void, onLogout: () => void, onSwitchToCustomer: () => void, onUpdateOrderStatus: (orderId: string, status: 'diterima' | 'dimasak' | 'diantar' | 'selesai') => void, setOrders: React.Dispatch<React.SetStateAction<Order[]>> }) {
-  const [activeTab, setActiveTab] = useState<'beranda' | 'laporan' | 'stok' | 'pengaturan'>('beranda');
+  const [activeTab, setActiveTab] = useState<'beranda' | 'laporan' | 'stok' | 'pengaturan'>(() => {
+    return (localStorage.getItem('indominite_ownerActiveTab') as any) || 'beranda';
+  });
   const [viewDetail, setViewDetail] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<any | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem('indominite_ownerActiveTab', activeTab);
+  }, [activeTab]);
 
   // Icon mapping
   const IconMap: any = {
