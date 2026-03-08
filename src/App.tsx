@@ -51,7 +51,12 @@ interface Order {
 export default function App() {
   const [view, setView] = useState<View>(() => {
     const saved = localStorage.getItem('indominite_view');
-    return (saved as View) || 'welcome';
+    // If they haven't started, show welcome. 
+    if (!saved || saved === 'welcome') return 'welcome';
+    // If they are owner, keep them on owner dashboard
+    if (saved === 'owner') return 'owner';
+    // Otherwise, always default to home on reload
+    return 'home';
   });
   const [address, setAddress] = useState('');
   const [addresses, setAddresses] = useState<any[]>([]);
@@ -70,7 +75,8 @@ export default function App() {
   });
   const [notification, setNotification] = useState<string | null>(null);
   const [homeActiveTab, setHomeActiveTab] = useState(() => {
-    return localStorage.getItem('indominite_homeActiveTab') || 'home';
+    // Always start at the home tab on reload
+    return 'home';
   });
   const [homeActiveCategory, setHomeActiveCategory] = useState('Mie');
   const [homeSearchQuery, setHomeSearchQuery] = useState('');
@@ -191,10 +197,6 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('indominite_paymentMethod', paymentMethod);
   }, [paymentMethod]);
-
-  useEffect(() => {
-    localStorage.setItem('indominite_homeActiveTab', homeActiveTab);
-  }, [homeActiveTab]);
 
   useEffect(() => {
     if (selectedItem) {
@@ -1461,18 +1463,35 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
               {!isFirebaseConfigured && (
                 <div className="mt-6 p-4 bg-orange-50 rounded-2xl border border-orange-100">
                   <h4 className="text-xs font-bold text-orange-800 mb-2 flex items-center gap-2">
-                    <AlertTriangle size={14} /> Cara Menghubungkan Firebase
+                    <AlertTriangle size={14} /> Status Konfigurasi (Debug)
                   </h4>
-                  <p className="text-[10px] text-orange-700 leading-relaxed">
-                    Untuk sinkronisasi pesanan antar perangkat (Owner & Pelanggan), Anda perlu memasukkan Firebase API Key di Environment Variables:
-                  </p>
-                  <ul className="text-[9px] text-orange-600 mt-2 space-y-1 list-disc list-inside">
-                    <li>VITE_FIREBASE_API_KEY</li>
-                    <li>VITE_FIREBASE_APP_ID</li>
-                    <li>VITE_FIREBASE_PROJECT_ID</li>
-                  </ul>
-                  <p className="text-[9px] text-orange-700 mt-2 font-bold italic">
-                    Saat ini Anda berada dalam "Mode Offline" di mana data hanya tersimpan di browser ini.
+                  <div className="space-y-2 mt-3">
+                    {[
+                      { key: 'API_KEY', val: import.meta.env.VITE_FIREBASE_API_KEY },
+                      { key: 'APP_ID', val: import.meta.env.VITE_FIREBASE_APP_ID },
+                      { key: 'PROJECT_ID', val: import.meta.env.VITE_FIREBASE_PROJECT_ID },
+                      { key: 'AUTH_DOMAIN', val: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN },
+                    ].map((item) => {
+                      const isSet = !!item.val && item.val !== 'YOUR_FIREBASE_API_KEY';
+                      const hasQuote = item.val?.includes('"');
+                      return (
+                        <div key={item.key} className="flex items-center justify-between bg-white/50 p-2 rounded-lg border border-orange-200">
+                          <span className="text-[9px] font-mono font-bold text-orange-900">{item.key}</span>
+                          <div className="flex items-center gap-2">
+                            {hasQuote && <span className="text-[8px] bg-red-100 text-red-600 px-1 rounded font-bold">ADA TANDA KUTIP!</span>}
+                            <span className={`text-[9px] font-bold ${isSet ? 'text-green-600' : 'text-red-500'}`}>
+                              {isSet ? 'TERDETEKSI' : 'KOSONG'}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[9px] text-orange-700 leading-relaxed mt-4 bg-white/40 p-2 rounded-lg">
+                    <span className="font-bold block mb-1">Solusi Cepat:</span>
+                    1. Pastikan di Vercel "Key" di kiri dan "Value" di kanan.<br/>
+                    2. Hapus tanda kutip (") jika ada di ujung teks.<br/>
+                    3. <b>WAJIB REDEPLOY</b> di tab Deployments Vercel setelah simpan.
                   </p>
                 </div>
               )}
@@ -1859,30 +1878,40 @@ function HomeScreen({
             <h2 className="text-3xl font-serif text-[#3D2B1F]">Riwayat Pembelian</h2>
           </div>
           
-          {orders.filter(o => o.customerName === customerName).length > 0 ? (
-            <div className="space-y-4">
-              {orders.filter(o => o.customerName === customerName).map((order) => (
-                <div key={order.id} className="bg-white p-4 rounded-[2rem] border border-[#3D2B1F]/5 shadow-sm">
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="text-xs font-bold text-[#3D2B1F]/60">#{order.id}</span>
-                    <span className="text-xs font-bold text-[#3D2B1F]">{order.timestamp.toLocaleDateString()}</span>
+          {(() => {
+            // Filter orders for this user. If offline, show all local orders.
+            const userOrders = orders.filter(o => 
+              o.customerName === (customerName || 'Pelanggan') || 
+              (customerPhone && o.customerPhone === customerPhone) ||
+              !import.meta.env.VITE_FIREBASE_API_KEY // If offline, show all
+            );
+
+            return userOrders.length > 0 ? (
+              <div className="space-y-4">
+                {userOrders.map((order) => (
+                  <div key={order.id} className="bg-white p-4 rounded-[2rem] border border-[#3D2B1F]/5 shadow-sm">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-xs font-bold text-[#3D2B1F]/60">#{order.id.slice(0, 8)}</span>
+                      <span className="text-xs font-bold text-[#3D2B1F]">{order.timestamp.toLocaleDateString()}</span>
+                    </div>
+                    <div className="space-y-1 mb-3">
+                      {order.items.map((item, i) => (
+                        <p key={i} className="text-sm text-[#3D2B1F]">{item.item.name} x{item.quantity}</p>
+                      ))}
+                    </div>
+                    <div className="text-xs text-[#3D2B1F]/70">
+                      <p>Status: <span className="font-bold uppercase text-[#D4AF37]">{order.status}</span></p>
+                      <p>Alamat: {order.customerAddress || '-'}</p>
+                      <p>Pembayaran: {order.paymentMethod || '-'}</p>
+                      <p className="font-bold mt-1 text-sm text-[#3D2B1F]">Total: Rp {order.total.toLocaleString()}</p>
+                    </div>
                   </div>
-                  <div className="space-y-1 mb-3">
-                    {order.items.map((item, i) => (
-                      <p key={i} className="text-sm text-[#3D2B1F]">{item.item.name} x{item.quantity}</p>
-                    ))}
-                  </div>
-                  <div className="text-xs text-[#3D2B1F]/70">
-                    <p>Alamat: {order.customerAddress || '-'}</p>
-                    <p>Pembayaran: {order.paymentMethod || '-'}</p>
-                    <p className="font-bold mt-1">Total: Rp {order.total.toLocaleString()}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-center text-[#3D2B1F]/40 py-10">Belum ada riwayat pembelian.</p>
-          )}
+                ))}
+              </div>
+            ) : (
+              <p className="text-center text-[#3D2B1F]/40 py-10">Belum ada riwayat pembelian.</p>
+            );
+          })()}
         </div>
       )}
 
@@ -2348,7 +2377,7 @@ function HomeScreen({
               <div className="absolute -top-1 -right-1 h-2.5 w-2.5 bg-red-500 rounded-full border-2 border-[#3D2B1F]"></div>
             )}
           </div>
-          <span className="text-[10px] font-bold uppercase tracking-widest">Status</span>
+          <span className="text-[10px] font-bold uppercase tracking-widest">Pesanan</span>
         </button>
         <button 
           onClick={handleProfileClick}
@@ -2563,7 +2592,7 @@ function DetailScreen({ item, onBack, onAddToCart, onBuyNow }: { item: any, onBa
         { name: 'Sosis', price: 1000 }
       ]
     : [
-        { name: 'Telur Rebus', price: 4000 },
+        { name: 'Telur Rebus', price: 3000 },
       ];
 
   const isSnack = item.categories.includes('Snack');
@@ -2947,11 +2976,11 @@ function StatusScreen({ onBack, onGoHome, activeOrder, onClearOrder, cart, onExt
                 <button 
                   onClick={() => {
                     if (onClearOrder) onClearOrder();
-                    onGoHome('home');
+                    onGoHome('riwayat');
                   }}
                   className="bg-[#3D2B1F] text-white px-8 py-4 rounded-full font-bold text-sm uppercase tracking-widest shadow-lg hover:bg-black transition-colors"
                 >
-                  Pesan Lagi
+                  Lihat Riwayat
                 </button>
               </div>
             )}
@@ -2998,7 +3027,7 @@ function StatusScreen({ onBack, onGoHome, activeOrder, onClearOrder, cart, onExt
               <div className="absolute -top-1 -right-1 h-2 w-2 bg-red-500 rounded-full border-2 border-[#3D2B1F]"></div>
             )}
           </div>
-          <span className="text-[9px] font-bold uppercase tracking-widest">Status</span>
+          <span className="text-[9px] font-bold uppercase tracking-widest">Pesanan</span>
         </button>
         <button 
           onClick={handleProfileClick}
