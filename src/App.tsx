@@ -162,6 +162,38 @@ export default function App() {
           console.error("Error parsing local inventory", e);
         }
       }
+
+      // Sync across tabs when using localStorage
+      const handleStorageChange = (e: StorageEvent) => {
+        if (e.key === 'indominite_orders' && e.newValue) {
+          try {
+            const parsed = JSON.parse(e.newValue);
+            setOrders(parsed.map((o: any) => ({ ...o, timestamp: new Date(o.timestamp) })).reverse());
+            
+            // Also update activeOrder if it was modified in another tab
+            setActiveOrder(prev => {
+              if (!prev) return prev;
+              const matchingOrder = parsed.find((o: any) => o.id === prev.id);
+              if (matchingOrder && matchingOrder.status !== prev.status) {
+                return { ...prev, status: matchingOrder.status };
+              }
+              return prev;
+            });
+          } catch (err) {
+            console.error("Error syncing orders", err);
+          }
+        }
+        if (e.key === 'indominite_inventory' && e.newValue) {
+          try {
+            setInventory(JSON.parse(e.newValue));
+          } catch (err) {
+            console.error("Error syncing inventory", err);
+          }
+        }
+      };
+      
+      window.addEventListener('storage', handleStorageChange);
+      return () => window.removeEventListener('storage', handleStorageChange);
     }
   }, []);
 
@@ -383,6 +415,11 @@ export default function App() {
     });
 
     setInventory(newInventory);
+    if (isFirebaseConfigured) {
+      set(ref(database, 'inventory'), newInventory);
+    } else {
+      localStorage.setItem('indominite_inventory', JSON.stringify(newInventory));
+    }
     setCart([]);
     setView('status');
   };
