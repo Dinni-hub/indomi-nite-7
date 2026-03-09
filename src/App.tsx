@@ -8,9 +8,8 @@ import { motion, AnimatePresence } from "motion/react";
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend 
 } from 'recharts';
-import { database, isFirebaseConfigured, auth } from "./services/firebaseService";
-import { ref, onValue, push, set, update, get } from "firebase/database";
-import { signInAnonymously } from "firebase/auth";
+import { database } from "./services/firebaseService";
+import { ref, onValue, push, set, update } from "firebase/database";
 import { 
   Bell, ChevronDown, Search, 
   SlidersHorizontal, Flame, Utensils, Soup, IceCream, 
@@ -23,13 +22,12 @@ import {
 } from "lucide-react";
 import { BottomNav, NavItem } from "./components/BottomNav";
 
-type View = 'welcome' | 'login' | 'home' | 'detail' | 'checkout' | 'status' | 'owner';
+type View = 'welcome' | 'home' | 'detail' | 'checkout' | 'orders' | 'owner';
 
 interface CartItem {
   item: any;
   quantity: number;
   toppings: string[];
-  spiciness: number;
   totalPrice: number;
   notes?: string;
 }
@@ -44,78 +42,179 @@ interface Order {
   items: CartItem[];
   total: number;
   timestamp: Date;
-  status: 'diterima' | 'dimasak' | 'diantar' | 'selesai';
+  status: 'diterima' | 'dimasak' | 'diantar' | 'selesai' | 'dibatalkan';
   paymentStatus: 'belum' | 'lunas';
 }
 
 export default function App() {
   const [view, setView] = useState<View>(() => {
-    const saved = localStorage.getItem('indominite_view');
-    // If they haven't started, show welcome. 
-    if (!saved || saved === 'welcome') return 'welcome';
-    // If they are owner, keep them on owner dashboard
-    if (saved === 'owner') return 'owner';
-    // Otherwise, always default to home on reload
-    return 'home';
+    try {
+      const saved = localStorage.getItem('app_view');
+      if (saved && ['welcome', 'home', 'detail', 'checkout', 'orders', 'owner'].includes(saved)) {
+        return saved as View;
+      }
+    } catch (e) {
+      console.error("Error parsing view from localStorage", e);
+    }
+    return 'welcome';
   });
-  const [address, setAddress] = useState('');
+  const [address, setAddress] = useState(() => localStorage.getItem('app_address') || '');
   const [addresses, setAddresses] = useState<any[]>([]);
   const [selectedItem, setSelectedItem] = useState<any>(() => {
-    const saved = localStorage.getItem('indominite_selectedItem');
-    return saved ? JSON.parse(saved) : null;
-  });
-  const [activeOrder, setActiveOrder] = useState<{
-    id: string;
-    startTime: number;
-    status: 'diterima' | 'dimasak' | 'diantar' | 'selesai';
-    isExtended: boolean;
-  } | null>(() => {
-    const saved = localStorage.getItem('indominite_activeOrder');
-    return saved ? JSON.parse(saved) : null;
+    try {
+      const saved = localStorage.getItem('app_selectedItem');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error("Error parsing selectedItem from localStorage", e);
+    }
+    return null;
   });
   const [notification, setNotification] = useState<string | null>(null);
-  const [homeActiveTab, setHomeActiveTab] = useState(() => {
-    // Always start at the home tab on reload
-    return 'home';
-  });
+  const [homeActiveTab, setHomeActiveTab] = useState(() => localStorage.getItem('app_homeTab') || 'home');
   const [homeActiveCategory, setHomeActiveCategory] = useState('Mie');
   const [homeSearchQuery, setHomeSearchQuery] = useState('');
   const [cart, setCart] = useState<CartItem[]>(() => {
-    const saved = localStorage.getItem('indominite_cart');
-    return saved ? JSON.parse(saved) : [];
+    try {
+      const saved = localStorage.getItem('app_cart');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error("Error parsing cart from localStorage", e);
+    }
+    return [];
   });
 
   const [userRole, setUserRole] = useState<'guest' | 'customer' | 'owner'>(() => {
-    const saved = localStorage.getItem('indominite_userRole');
+    const saved = localStorage.getItem('app_userRole');
     return (saved as any) || 'guest';
   });
-  const [customerName, setCustomerName] = useState(() => localStorage.getItem('indominite_customerName') || '');
-  const [customerPhone, setCustomerPhone] = useState(() => localStorage.getItem('indominite_customerPhone') || '');
-  const [customerEmail, setCustomerEmail] = useState(() => localStorage.getItem('indominite_customerEmail') || '');
-  const [customerAddress, setCustomerAddress] = useState(() => localStorage.getItem('indominite_customerAddress') || '');
-  const [paymentMethod, setPaymentMethod] = useState(() => localStorage.getItem('indominite_paymentMethod') || 'Tunai');
-  const [orders, setOrders] = useState<Order[]>([]);
-  
-  // Calculate stats from orders
-  const { totalRevenue, totalOrders } = useMemo(() => {
-    const total = orders.reduce((sum, order) => sum + order.total, 0);
-    return { totalRevenue: total, totalOrders: orders.length };
-  }, [orders]);
-  
+  const [customerName, setCustomerName] = useState(() => localStorage.getItem('app_customerName') || '');
+  const [customerPhone, setCustomerPhone] = useState(() => localStorage.getItem('app_customerPhone') || '');
+  const [customerEmail, setCustomerEmail] = useState(() => localStorage.getItem('app_customerEmail') || '');
+  const [customerAddress, setCustomerAddress] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('TUNAI');
+  const [inventory, setInventory] = useState(() => {
+    try {
+      const saved = localStorage.getItem('app_inventory');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error("Error parsing inventory from localStorage", e);
+    }
+    return [
+      { 
+        id: 1, 
+        name: 'Indomie Goreng', 
+        stock: 15, 
+        unit: 'bks', 
+        max: 100, 
+        min: 5, 
+        icon: 'Package', 
+        color: 'bg-orange-100 text-orange-600',
+        imageUrl: 'https://raw.githubusercontent.com/Dinni-hub/manajemen-stok/main/Indomie%20goreng%201%20bungkus%2085%20gram%20_%20indomie%20_%20mie%20goreng%20indomie.jpg'
+      },
+      { 
+        id: 2, 
+        name: 'Telur', 
+        stock: 42, 
+        unit: 'kg', 
+        max: 100, 
+        min: 1, 
+        icon: 'Egg', 
+        color: 'bg-amber-100 text-amber-600',
+        imageUrl: 'https://raw.githubusercontent.com/Dinni-hub/manajemen-stok/main/Telur%20Ayam%20Organik%20Nature%20Eggs%20%20(10%20pcs%20_%20pack).jpg'
+      },
+      { 
+        id: 3, 
+        name: 'Minyak', 
+        stock: 5, 
+        unit: 'ltr', 
+        max: 20, 
+        min: 1, 
+        icon: 'Droplet', 
+        color: 'bg-yellow-100 text-yellow-600',
+        imageUrl: 'https://raw.githubusercontent.com/Dinni-hub/manajemen-stok/main/TROPICAL%20MINYAK%20GORENG%20%202000mL.jpg'
+      },
+      { 
+        id: 4, 
+        name: 'Tusuk Sate', 
+        stock: 100, 
+        unit: 'pcs', 
+        max: 500, 
+        min: 100, 
+        icon: 'Flame', 
+        color: 'bg-stone-100 text-stone-600',
+        imageUrl: 'https://raw.githubusercontent.com/Dinni-hub/manajemen-stok/main/Tusuk%20sate%20_%20tusuk%20pentol%2C%20Sempol%2C%20sate%20kambing%20_%20sapi_%20Merk%20_panda%20alami_%20isi%20%C2%B1200%20biji.jpg'
+      },
+      { 
+        id: 5, 
+        name: 'Packaging Box Kertas', 
+        stock: 30, 
+        unit: 'pcs', 
+        max: 200, 
+        min: 10, 
+        icon: 'Box', 
+        color: 'bg-stone-100 text-stone-600',
+        imageUrl: 'https://raw.githubusercontent.com/Dinni-hub/manajemen-stok/main/MSP%20~%20LUNCH%20BOX%20_%20PAPER%20BOX%20COKELAT%20M%26L%20_50PCS%20_%20S%20100PCS.jpg'
+      },
+      { 
+        id: 6, 
+        name: 'Garpu', 
+        stock: 50, 
+        unit: 'pcs', 
+        max: 200, 
+        min: 10, 
+        icon: 'Utensils', 
+        color: 'bg-slate-100 text-slate-600',
+        imageUrl: 'https://raw.githubusercontent.com/Dinni-hub/manajemen-stok/main/(50%20pieces)%20Disposable%20Fork%20%26%20Spoon%20High%20Quality%20Plastic%20PP%20Fork%20Spoon_%20Plastic%20Cutlery%20_%20Garpu%20Plastik%20_%20Sudu%20Plastik.jpg'
+      },
+      { 
+        id: 7, 
+        name: 'Saus Tomat', 
+        stock: 2, 
+        unit: 'btl', 
+        max: 5, 
+        min: 1, 
+        icon: 'Droplet', 
+        color: 'bg-red-50 text-red-500',
+        imageUrl: 'https://raw.githubusercontent.com/Dinni-hub/manajemen-stok/main/INDOFOOD%20TOMATO%20SAUCE%20SAUS%20TOMAT%20BOTOL%20275ML.jpg'
+      },
+      { 
+        id: 8, 
+        name: 'Saus Sambal', 
+        stock: 3, 
+        unit: 'btl', 
+        max: 5, 
+        min: 1, 
+        icon: 'Droplet', 
+        color: 'bg-orange-50 text-orange-500',
+        imageUrl: 'https://raw.githubusercontent.com/Dinni-hub/manajemen-stok/main/INDOFOOD%20Sambal%20Pedas%20275ml%20ACCJKT.jpg'
+      },
+    ];
+  });
+  const [orders, setOrders] = useState<Order[]>(() => {
+    try {
+      const saved = localStorage.getItem('app_orders');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return parsed.map((o: any) => ({
+          ...o,
+          timestamp: new Date(o.timestamp)
+        }));
+      }
+    } catch (e) {
+      console.error("Error parsing orders from localStorage", e);
+    }
+    return [];
+  });
+
+  const isFirebaseConfigured = useMemo(() => {
+    return !!import.meta.env.VITE_FIREBASE_API_KEY && 
+           import.meta.env.VITE_FIREBASE_API_KEY !== 'YOUR_FIREBASE_API_KEY';
+  }, []);
+
   useEffect(() => {
     if (isFirebaseConfigured) {
-      // Sign in anonymously to allow access to locked database
-      signInAnonymously(auth).catch((error) => {
-        console.error("Anonymous auth error:", error);
-        if (error.code === 'auth/configuration-not-found') {
-          setNotification("Error: Fitur 'Anonymous Sign-in' belum diaktifkan di Firebase Console.");
-        } else {
-          setNotification(`Gagal masuk ke Firebase: ${error.message}`);
-        }
-      });
-
       const ordersRef = ref(database, 'orders');
-      const unsubscribe = onValue(ordersRef, (snapshot) => {
+      const unsubscribeOrders = onValue(ordersRef, (snapshot) => {
         const data = snapshot.val();
         if (data) {
           const ordersArray = Object.keys(data).map(key => ({
@@ -128,256 +227,128 @@ export default function App() {
           setOrders([]);
         }
       }, (error) => {
-        console.error("Firebase onValue error:", error);
-        setNotification("Gagal memuat data dari Firebase. Periksa koneksi atau konfigurasi.");
+        console.error("Firebase Orders error:", error);
       });
 
-      // Sync Inventory from Firebase
       const inventoryRef = ref(database, 'inventory');
-      onValue(inventoryRef, (snapshot) => {
+      const unsubscribeInventory = onValue(inventoryRef, (snapshot) => {
         const data = snapshot.val();
         if (data) {
           setInventory(data);
         }
+      }, (error) => {
+        console.error("Firebase Inventory error:", error);
       });
 
-      return () => unsubscribe();
-    } else {
-      // Fallback to LocalStorage for demo purposes
-      const localOrders = localStorage.getItem('indominite_orders');
-      if (localOrders) {
-        try {
-          const parsed = JSON.parse(localOrders);
-          setOrders(parsed.map((o: any) => ({ ...o, timestamp: new Date(o.timestamp) })).reverse());
-        } catch (e) {
-          console.error("Error parsing local orders", e);
-        }
-      }
-
-      const localInventory = localStorage.getItem('indominite_inventory');
-      if (localInventory) {
-        try {
-          setInventory(JSON.parse(localInventory));
-        } catch (e) {
-          console.error("Error parsing local inventory", e);
-        }
-      }
-
-      // Sync across tabs when using localStorage
-      const handleStorageChange = (e: StorageEvent) => {
-        if (e.key === 'indominite_orders' && e.newValue) {
-          try {
-            const parsed = JSON.parse(e.newValue);
-            setOrders(parsed.map((o: any) => ({ ...o, timestamp: new Date(o.timestamp) })).reverse());
-            
-            // Also update activeOrder if it was modified in another tab
-            setActiveOrder(prev => {
-              if (!prev) return prev;
-              const matchingOrder = parsed.find((o: any) => o.id === prev.id);
-              if (matchingOrder && matchingOrder.status !== prev.status) {
-                return { ...prev, status: matchingOrder.status };
-              }
-              return prev;
-            });
-          } catch (err) {
-            console.error("Error syncing orders", err);
-          }
-        }
-        if (e.key === 'indominite_inventory' && e.newValue) {
-          try {
-            setInventory(JSON.parse(e.newValue));
-          } catch (err) {
-            console.error("Error syncing inventory", err);
-          }
-        }
+      return () => {
+        unsubscribeOrders();
+        unsubscribeInventory();
       };
-      
-      window.addEventListener('storage', handleStorageChange);
-      return () => window.removeEventListener('storage', handleStorageChange);
     }
-  }, []);
-
-  // Persist state to localStorage
-  useEffect(() => {
-    localStorage.setItem('indominite_view', view);
-  }, [view]);
+  }, [isFirebaseConfigured]);
 
   useEffect(() => {
-    localStorage.setItem('indominite_cart', JSON.stringify(cart));
-  }, [cart]);
-
-  useEffect(() => {
-    localStorage.setItem('indominite_userRole', userRole);
-  }, [userRole]);
-
-  useEffect(() => {
-    localStorage.setItem('indominite_customerName', customerName);
-  }, [customerName]);
-
-  useEffect(() => {
-    localStorage.setItem('indominite_customerPhone', customerPhone);
-  }, [customerPhone]);
-
-  useEffect(() => {
-    localStorage.setItem('indominite_customerEmail', customerEmail);
-  }, [customerEmail]);
-
-  useEffect(() => {
-    localStorage.setItem('indominite_customerAddress', customerAddress);
-  }, [customerAddress]);
-
-  useEffect(() => {
-    localStorage.setItem('indominite_paymentMethod', paymentMethod);
-  }, [paymentMethod]);
+    localStorage.setItem('app_view', view);
+    // If we are in detail view but have no item, go back home
+    if (view === 'detail' && !selectedItem) {
+      setView('home');
+    }
+  }, [view, selectedItem]);
 
   useEffect(() => {
     if (selectedItem) {
-      localStorage.setItem('indominite_selectedItem', JSON.stringify(selectedItem));
+      localStorage.setItem('app_selectedItem', JSON.stringify(selectedItem));
     } else {
-      localStorage.removeItem('indominite_selectedItem');
+      localStorage.removeItem('app_selectedItem');
     }
   }, [selectedItem]);
 
   useEffect(() => {
-    if (activeOrder) {
-      localStorage.setItem('indominite_activeOrder', JSON.stringify(activeOrder));
-    } else {
-      localStorage.removeItem('indominite_activeOrder');
-    }
-  }, [activeOrder]);
+    localStorage.setItem('app_homeTab', homeActiveTab);
+  }, [homeActiveTab]);
 
-  const [inventory, setInventory] = useState([
-    { 
-      id: 1, 
-      name: 'Indomie Goreng', 
-      stock: 15, 
-      unit: 'bks', 
-      max: 100, 
-      min: 10, 
-      icon: 'Package', 
-      color: 'bg-orange-100 text-orange-600',
-      imageUrl: 'https://raw.githubusercontent.com/Dinni-hub/manajemen-stok/main/Indomie%20goreng%201%20bungkus%2085%20gram%20_%20indomie%20_%20mie%20goreng%20indomie.jpg'
-    },
-    { 
-      id: 2, 
-      name: 'Telur', 
-      stock: 42, 
-      unit: 'kg', 
-      max: 100, 
-      min: 10, 
-      icon: 'Egg', 
-      color: 'bg-amber-100 text-amber-600',
-      imageUrl: 'https://raw.githubusercontent.com/Dinni-hub/manajemen-stok/main/Telur%20Ayam%20Organik%20Nature%20Eggs%20%20(10%20pcs%20_%20pack).jpg'
-    },
-    { 
-      id: 3, 
-      name: 'Minyak', 
-      stock: 5, 
-      unit: 'ltr', 
-      max: 20, 
-      min: 1, 
-      icon: 'Droplet', 
-      color: 'bg-yellow-100 text-yellow-600',
-      imageUrl: 'https://raw.githubusercontent.com/Dinni-hub/manajemen-stok/main/TROPICAL%20MINYAK%20GORENG%20%202000mL.jpg'
-    },
-    { 
-      id: 4, 
-      name: 'Tusuk Sate', 
-      stock: 100, 
-      unit: 'pcs', 
-      max: 500, 
-      min: 100, 
-      icon: 'Flame', 
-      color: 'bg-stone-100 text-stone-600',
-      imageUrl: 'https://raw.githubusercontent.com/Dinni-hub/manajemen-stok/main/Tusuk%20sate%20_%20tusuk%20pentol%2C%20Sempol%2C%20sate%20kambing%20_%20sapi_%20Merk%20_panda%20alami_%20isi%20%C2%B1200%20biji.jpg'
-    },
-    { 
-      id: 5, 
-      name: 'Packaging Box Kertas', 
-      stock: 30, 
-      unit: 'pcs', 
-      max: 200, 
-      min: 10, 
-      icon: 'Box', 
-      color: 'bg-stone-100 text-stone-600',
-      imageUrl: 'https://raw.githubusercontent.com/Dinni-hub/manajemen-stok/main/MSP%20~%20LUNCH%20BOX%20_%20PAPER%20BOX%20COKELAT%20M%26L%20_50PCS%20_%20S%20100PCS.jpg'
-    },
-    { 
-      id: 6, 
-      name: 'Garpu', 
-      stock: 50, 
-      unit: 'pcs', 
-      max: 200, 
-      min: 10, 
-      icon: 'Utensils', 
-      color: 'bg-slate-100 text-slate-600',
-      imageUrl: 'https://raw.githubusercontent.com/Dinni-hub/manajemen-stok/main/(50%20pieces)%20Disposable%20Fork%20%26%20Spoon%20High%20Quality%20Plastic%20PP%20Fork%20Spoon_%20Plastic%20Cutlery%20_%20Garpu%20Plastik%20_%20Sudu%20Plastik.jpg'
-    },
-    { 
-      id: 7, 
-      name: 'Saus Tomat', 
-      stock: 2, 
-      unit: 'btl', 
-      max: 5, 
-      min: 1, 
-      icon: 'Droplet', 
-      color: 'bg-red-50 text-red-500',
-      imageUrl: 'https://raw.githubusercontent.com/Dinni-hub/manajemen-stok/main/INDOFOOD%20TOMATO%20SAUCE%20SAUS%20TOMAT%20BOTOL%20275ML.jpg'
-    },
-    { 
-      id: 8, 
-      name: 'Saus Sambal', 
-      stock: 3, 
-      unit: 'btl', 
-      max: 5, 
-      min: 1, 
-      icon: 'Droplet', 
-      color: 'bg-orange-50 text-orange-500',
-      imageUrl: 'https://raw.githubusercontent.com/Dinni-hub/manajemen-stok/main/INDOFOOD%20Sambal%20Pedas%20275ml%20ACCJKT.jpg'
-    },
-  ]);
+  useEffect(() => {
+    localStorage.setItem('app_cart', JSON.stringify(cart));
+  }, [cart]);
+
+  useEffect(() => {
+    localStorage.setItem('app_userRole', userRole);
+  }, [userRole]);
+
+  useEffect(() => {
+    localStorage.setItem('app_customerName', customerName);
+  }, [customerName]);
+
+  useEffect(() => {
+    localStorage.setItem('app_customerPhone', customerPhone);
+  }, [customerPhone]);
+
+  useEffect(() => {
+    localStorage.setItem('app_customerEmail', customerEmail);
+  }, [customerEmail]);
+
+  useEffect(() => {
+    localStorage.setItem('app_address', address);
+  }, [address]);
+
+  useEffect(() => {
+    if (!isFirebaseConfigured) {
+      localStorage.setItem('app_inventory', JSON.stringify(inventory));
+    }
+  }, [inventory, isFirebaseConfigured]);
+  
+  // Calculate stats from orders
+  const { totalRevenue, totalOrders } = useMemo(() => {
+    const total = orders.reduce((sum, order) => sum + order.total, 0);
+    return { totalRevenue: total, totalOrders: orders.length };
+  }, [orders]);
 
   const handleSelectItem = (item: any) => {
     setSelectedItem(item);
     setView('detail');
   };
 
-  const handlePlaceOrder = () => {
+  const handlePlaceOrder = (name: string, phone: string, email: string, orderAddress: string) => {
     if (cart.length === 0) return;
 
-    const totalOrderPrice = cart.reduce((sum, item) => sum + item.totalPrice, 0);
+    const finalName = name || 'Pelanggan';
+    setCustomerName(finalName);
+    setCustomerPhone(phone);
+    setCustomerEmail(email);
+    setAddress(orderAddress);
 
-    // 1. Create Order Record
-    const newOrder: Omit<Order, 'id'> = {
-      customerName: customerName || 'Pelanggan',
-      customerPhone: customerPhone,
-      customerEmail: customerEmail,
-      customerAddress: address,
+    // 1. Create Order Records
+    const newOrders: Order[] = cart.map(cartItem => ({
+      id: Math.floor(1000 + Math.random() * 9000).toString(),
+      customerName: finalName,
+      customerPhone: phone,
+      customerEmail: email,
+      customerAddress: orderAddress,
       paymentMethod: paymentMethod,
-      items: cart,
-      total: totalOrderPrice,
-      timestamp: new Date().toISOString() as any, // Firebase stores as string
+      items: [cartItem],
+      total: cartItem.totalPrice,
+      timestamp: new Date(), // Use Date object locally
       status: 'diterima',
       paymentStatus: 'belum'
-    };
+    }));
     
-    const orderId = isFirebaseConfigured ? push(ref(database, 'orders'), newOrder).key : `local_${Date.now()}`;
-    
-    if (!isFirebaseConfigured) {
-      const localOrders = JSON.parse(localStorage.getItem('indominite_orders') || '[]');
-      const orderWithId = { ...newOrder, id: orderId };
-      const updatedLocalOrders = [...localOrders, orderWithId];
-      localStorage.setItem('indominite_orders', JSON.stringify(updatedLocalOrders));
-      setOrders(updatedLocalOrders.map((o: any) => ({ ...o, timestamp: new Date(o.timestamp) })).reverse());
+    if (isFirebaseConfigured) {
+      const ordersRef = ref(database, 'orders');
+      newOrders.forEach(order => {
+        // Convert to string for Firebase
+        const orderForFirebase = { ...order, timestamp: order.timestamp.toISOString() };
+        push(ordersRef, orderForFirebase);
+      });
+      // Also update orders state locally for immediate UI update if needed, 
+      // though the onValue listener should handle it.
+      setOrders(prev => [...newOrders, ...prev]);
+    } else {
+      const updatedOrders = [...newOrders, ...orders];
+      setOrders(updatedOrders);
+      localStorage.setItem('app_orders', JSON.stringify(updatedOrders));
     }
 
-    setActiveOrder({
-      id: orderId || 'pending',
-      startTime: Date.now(),
-      status: 'diterima',
-      isExtended: false
-    });
-
+    // 2. Update Stats (Now handled by useMemo on orders)
     // 3. Deduct Inventory
     const newInventory = [...inventory];
     
@@ -400,12 +371,6 @@ export default function App() {
         }
       });
 
-      // Deduct Spiciness (Cabe)
-      if (cartItem.spiciness > 0) {
-        const idx = newInventory.findIndex(i => i.name === 'Cabe');
-        if (idx > -1) newInventory[idx].stock = Math.max(0, newInventory[idx].stock - (0.01 * cartItem.spiciness * cartItem.quantity)); // 10g per level
-      }
-
       // Deduct Packaging & Utensils
       const pkgIdx = newInventory.findIndex(i => i.name === 'Packaging Box Kertas');
       if (pkgIdx > -1) newInventory[pkgIdx].stock = Math.max(0, newInventory[pkgIdx].stock - cartItem.quantity);
@@ -418,41 +383,30 @@ export default function App() {
     if (isFirebaseConfigured) {
       set(ref(database, 'inventory'), newInventory);
     } else {
-      localStorage.setItem('indominite_inventory', JSON.stringify(newInventory));
+      localStorage.setItem('app_inventory', JSON.stringify(newInventory));
     }
     setCart([]);
-    setView('status');
+    setView('orders');
   };
 
-  useEffect(() => {
-    if (!activeOrder || activeOrder.status === 'selesai') return;
+  const handleCancelOrder = (orderId: string) => {
+    if (isFirebaseConfigured) {
+      const orderRef = ref(database, `orders/${orderId}`);
+      update(orderRef, { status: 'dibatalkan' });
+    } else {
+      const updatedOrders = orders.map(o => o.id === orderId ? { ...o, status: 'dibatalkan' as const } : o);
+      setOrders(updatedOrders);
+      localStorage.setItem('app_orders', JSON.stringify(updatedOrders));
+    }
+    setNotification("Pesanan telah dibatalkan.");
+    setTimeout(() => setNotification(null), 3000);
+  };
 
-    const interval = setInterval(() => {
-      const elapsed = (Date.now() - activeOrder.startTime) / 1000; // seconds
-      
-      let newStatus = activeOrder.status;
-      
-      if (elapsed > 5 && activeOrder.status === 'diterima') {
-        newStatus = 'dimasak';
-        setNotification('Pesanan Anda sedang dimasak oleh koki!');
-        setTimeout(() => setNotification(null), 5000);
-      }
-      
-      // Timer check for completion (10 mins = 600s) as a safety fallback
-      const duration = activeOrder.isExtended ? 900 : 600; 
-      if (elapsed >= duration && activeOrder.status !== 'selesai') {
-         newStatus = 'selesai';
-         setNotification('Pesanan telah sampai! Selamat menikmati.');
-         setTimeout(() => setNotification(null), 5000);
-      }
-
-      if (newStatus !== activeOrder.status) {
-        setActiveOrder(prev => prev ? { ...prev, status: newStatus } : null);
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [activeOrder]);
+  const handleRemoveFromCart = (index: number) => {
+    setCart(prev => prev.filter((_, i) => i !== index));
+    setNotification('Item dihapus dari keranjang');
+    setTimeout(() => setNotification(null), 3000);
+  };
 
   return (
     <div className="min-h-[100dvh] flex flex-col items-center justify-center p-0 md:p-4 bg-stone-100">
@@ -472,17 +426,6 @@ export default function App() {
         {view === 'welcome' && (
           <WelcomeScreen onStart={() => setView('home')} />
         )}
-        {view === 'login' && (
-          <LoginScreen 
-            onLogin={(role, name, phone, email) => {
-              setUserRole(role);
-              setCustomerName(name);
-              setCustomerPhone(phone || '');
-              setCustomerEmail(email || '');
-              setView('home');
-            }}
-          />
-        )}
         {view === 'owner' && (
           <OwnerScreen 
             inventory={inventory}
@@ -490,16 +433,16 @@ export default function App() {
             totalOrders={totalOrders}
             orders={orders}
             setOrders={setOrders}
+            isFirebaseConfigured={isFirebaseConfigured}
             onUpdateStock={(id, newStock) => {
               const updatedInventory = inventory.map(item => 
                 item.id === id ? { ...item, stock: newStock } : item
               );
               setInventory(updatedInventory);
-              
               if (isFirebaseConfigured) {
                 set(ref(database, 'inventory'), updatedInventory);
               } else {
-                localStorage.setItem('indominite_inventory', JSON.stringify(updatedInventory));
+                localStorage.setItem('app_inventory', JSON.stringify(updatedInventory));
               }
             }}
             onUpdateItem={(updatedItem) => {
@@ -507,11 +450,10 @@ export default function App() {
                 item.id === updatedItem.id ? updatedItem : item
               );
               setInventory(updatedInventory);
-              
               if (isFirebaseConfigured) {
                 set(ref(database, 'inventory'), updatedInventory);
               } else {
-                localStorage.setItem('indominite_inventory', JSON.stringify(updatedInventory));
+                localStorage.setItem('app_inventory', JSON.stringify(updatedInventory));
               }
             }}
             onLogout={() => {
@@ -522,34 +464,26 @@ export default function App() {
               setView('home');
             }}
             onUpdateOrderStatus={(orderId, status) => {
-              // Update Firebase or LocalStorage
               if (isFirebaseConfigured) {
+                // Update Firebase
                 const orderRef = ref(database, `orders/${orderId}`);
                 update(orderRef, { status });
               } else {
-                const localOrders = JSON.parse(localStorage.getItem('indominite_orders') || '[]');
-                const updatedLocalOrders = localOrders.map((o: any) => 
-                  o.id === orderId ? { ...o, status } : o
-                );
-                localStorage.setItem('indominite_orders', JSON.stringify(updatedLocalOrders));
-                setOrders(updatedLocalOrders.map((o: any) => ({ ...o, timestamp: new Date(o.timestamp) })).reverse());
+                const updatedOrders = orders.map(o => o.id === orderId ? { ...o, status } : o);
+                setOrders(updatedOrders);
+                localStorage.setItem('app_orders', JSON.stringify(updatedOrders));
               }
               
-              // Update active order if it matches
-              if (activeOrder && activeOrder.id === orderId) {
-                setActiveOrder(prev => prev ? { ...prev, status } : null);
-                
-                // Trigger specific notifications based on status
-                if (status === 'dimasak') {
-                  setNotification('Pesanan Anda sedang dimasak oleh koki!');
-                } else if (status === 'diantar') {
-                  setNotification('Pesanan Anda sudah selesai dan siap diantar!');
-                } else if (status === 'selesai') {
-                  setNotification('Pesanan telah sampai! Selamat menikmati.');
-                }
-                
-                setTimeout(() => setNotification(null), 5000);
+              // Trigger specific notifications based on status
+              if (status === 'dimasak') {
+                setNotification('Pesanan Anda sedang dimasak oleh koki!');
+              } else if (status === 'diantar') {
+                setNotification('Pesanan Anda sudah selesai dan siap diantar!');
+              } else if (status === 'selesai') {
+                setNotification('Pesanan telah sampai! Selamat menikmati.');
               }
+              
+              setTimeout(() => setNotification(null), 5000);
             }}
           />
         )}
@@ -563,7 +497,7 @@ export default function App() {
             customerEmail={customerEmail}
             onCheckout={() => setView('checkout')} 
             onSelectItem={handleSelectItem}
-            hasActiveOrder={!!activeOrder}
+            hasActiveOrder={orders.some(o => o.customerName === customerName && o.status !== 'selesai')}
             activeTab={homeActiveTab}
             setActiveTab={setHomeActiveTab}
             activeCategory={homeActiveCategory}
@@ -571,7 +505,7 @@ export default function App() {
             searchQuery={homeSearchQuery}
             setSearchQuery={setHomeSearchQuery}
             onAddressChange={(newAddr) => setAddress(newAddr)}
-            onViewStatus={() => setView('status')}
+            onViewOrders={() => setView('orders')}
             cart={cart}
             userRole={userRole}
             onOpenOwnerDashboard={() => setView('owner')}
@@ -589,7 +523,9 @@ export default function App() {
               setUserRole('guest');
               setView('welcome');
             }}
+            onBackToWelcome={() => setView('welcome')}
             orders={orders}
+            onRemoveFromCart={handleRemoveFromCart}
           />
         )}
         {view === 'detail' && (
@@ -616,7 +552,7 @@ export default function App() {
             onPaymentMethodChange={setPaymentMethod}
             cart={cart}
             onBack={() => setView('home')} 
-            onOrderPlaced={handlePlaceOrder}
+            onOrderPlaced={(name, phone, email, addr) => handlePlaceOrder(name, phone, email, addr)}
             customerName={customerName}
             customerPhone={customerPhone}
             customerEmail={customerEmail}
@@ -632,20 +568,16 @@ export default function App() {
             }}
           />
         )}
-        {view === 'status' && (
-          <StatusScreen 
+        {view === 'orders' && (
+          <OrdersScreen 
             onBack={() => setView('home')} 
             onGoHome={(tab = 'home') => {
               setHomeActiveTab(tab);
               setView('home');
             }}
-            activeOrder={activeOrder}
-            onClearOrder={() => setActiveOrder(null)}
-            cart={cart}
-            onExtendOrder={() => setActiveOrder(prev => prev ? { ...prev, isExtended: true } : null)}
+            orders={orders}
             customerName={customerName}
-            customerPhone={customerPhone}
-            customerEmail={customerEmail}
+            cart={cart}
           />
         )}
       </div>
@@ -723,95 +655,12 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
   );
 }
 
-function LoginScreen({ onLogin }: { onLogin: (role: 'customer' | 'owner', name: string, phone: string, email: string) => void }) {
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [email, setEmail] = useState('');
-  const [error, setError] = useState<string | null>(null);
-
-  const handleSubmit = () => {
-    if (!name || !phone || !email) {
-      setError('Mohon lengkapi semua data.');
-      return;
-    }
-
-    if (email.toLowerCase() === 'indominite@gmail.com') {
-      onLogin('owner', name, phone, email);
-    } else {
-      // Simulate sending data to owner
-      console.log(`Sending customer data to owner: ${name}, ${phone}, ${email}`);
-      onLogin('customer', name, phone, email);
-    }
-  };
-
-  return (
-    <div className="flex flex-col h-full bg-[#F5F2EA] px-8 py-10">
-      <div className="flex-1 flex flex-col justify-center">
-        <div className="text-center mb-10">
-          <h1 className="text-3xl font-serif font-bold text-[#3D2B1F] mb-2">Selamat Datang</h1>
-          <p className="text-[#3D2B1F]/60">Silakan isi data diri Anda untuk melanjutkan.</p>
-        </div>
-
-        <div className="space-y-4">
-          <div>
-            <label className="text-xs font-bold uppercase tracking-widest text-[#3D2B1F]/40 ml-2 mb-1 block">Nama Lengkap</label>
-            <input 
-              type="text" 
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full h-14 bg-white rounded-2xl px-6 text-sm font-medium border border-[#3D2B1F]/10 focus:outline-none focus:ring-2 focus:ring-[#3D2B1F]/20"
-              placeholder="Masukkan nama Anda"
-            />
-          </div>
-          <div>
-            <label className="text-xs font-bold uppercase tracking-widest text-[#3D2B1F]/40 ml-2 mb-1 block">Nomor WhatsApp</label>
-            <input 
-              type="tel" 
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              className="w-full h-14 bg-white rounded-2xl px-6 text-sm font-medium border border-[#3D2B1F]/10 focus:outline-none focus:ring-2 focus:ring-[#3D2B1F]/20"
-              placeholder="08xxxxxxxxxx"
-            />
-          </div>
-          <div>
-            <label className="text-xs font-bold uppercase tracking-widest text-[#3D2B1F]/40 ml-2 mb-1 block">Email</label>
-            <input 
-              type="email" 
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full h-14 bg-white rounded-2xl px-6 text-sm font-medium border border-[#3D2B1F]/10 focus:outline-none focus:ring-2 focus:ring-[#3D2B1F]/20"
-              placeholder="budi@gmail.com"
-            />
-          </div>
-        </div>
-
-        {error && (
-          <p className="text-red-500 text-sm text-center mt-4 font-bold">{error}</p>
-        )}
-
-        <button 
-          onClick={handleSubmit}
-          className="w-full h-16 bg-[#3D2B1F] text-[#F5F2EA] rounded-2xl font-bold text-sm uppercase tracking-widest mt-8 shadow-xl hover:bg-black transition-colors"
-        >
-          Masuk Aplikasi
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateStock, onUpdateItem, onLogout, onSwitchToCustomer, onUpdateOrderStatus, setOrders }: { inventory: any[], totalRevenue: number, totalOrders: number, orders: Order[], onUpdateStock: (id: number, stock: number) => void, onUpdateItem: (item: any) => void, onLogout: () => void, onSwitchToCustomer: () => void, onUpdateOrderStatus: (orderId: string, status: 'diterima' | 'dimasak' | 'diantar' | 'selesai') => void, setOrders: React.Dispatch<React.SetStateAction<Order[]>> }) {
-  const [activeTab, setActiveTab] = useState<'beranda' | 'laporan' | 'stok' | 'pengaturan'>(() => {
-    return (localStorage.getItem('indominite_ownerActiveTab') as any) || 'beranda';
-  });
+function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateStock, onUpdateItem, onLogout, onSwitchToCustomer, onUpdateOrderStatus, setOrders, isFirebaseConfigured }: { inventory: any[], totalRevenue: number, totalOrders: number, orders: Order[], onUpdateStock: (id: number, stock: number) => void, onUpdateItem: (item: any) => void, onLogout: () => void, onSwitchToCustomer: () => void, onUpdateOrderStatus: (orderId: string, status: 'diterima' | 'dimasak' | 'diantar' | 'selesai') => void, setOrders: React.Dispatch<React.SetStateAction<Order[]>>, isFirebaseConfigured: boolean }) {
+  const [activeTab, setActiveTab] = useState<'beranda' | 'laporan' | 'stok' | 'pengaturan'>('beranda');
   const [viewDetail, setViewDetail] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<any | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
-
-  useEffect(() => {
-    localStorage.setItem('indominite_ownerActiveTab', activeTab);
-  }, [activeTab]);
 
   // Icon mapping
   const IconMap: any = {
@@ -856,7 +705,6 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
       if (cart.toppings.length > 0) {
         text += `  Topping: ${cart.toppings.join(', ')}\n`;
       }
-      text += `  Level Pedas: ${cart.spiciness}\n`;
       if (cart.notes) {
         text += `  Catatan: ${cart.notes}\n`;
       }
@@ -931,7 +779,7 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
         // Toppings HPP
         cartItem.toppings.forEach(toppingName => {
           if (toppingName === 'Telur Rebus') {
-            orderHpp += 3010 * cartItem.quantity;
+            orderHpp += 2500 * cartItem.quantity;
           } else {
             // Default 30% margin for other toppings
             // We need to find the topping price. 
@@ -948,14 +796,15 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
 
   const monthlyData = useMemo(() => {
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
-    const now = new Date();
     const result = [];
     
-    // Get last 6 months including current
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const monthIdx = d.getMonth();
-      const year = d.getFullYear();
+    // Start from March 2026
+    const startYear = 2026;
+    const startMonth = 2; // March is index 2
+
+    for (let i = 0; i < 10; i++) { // Mar to Dec
+      const monthIdx = startMonth + i;
+      const year = startYear;
       
       const monthSales = orders.filter(o => 
         o.timestamp.getMonth() === monthIdx && 
@@ -1085,9 +934,8 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
   return (
     <div className="flex flex-col h-full bg-[#F5F2EA] relative">
       {!isFirebaseConfigured && (
-        <div className="bg-red-500 text-white px-6 py-3 text-[10px] font-bold text-center uppercase tracking-widest z-50 shadow-lg">
-          <p className="mb-1">⚠️ Firebase Belum Dikonfigurasi</p>
-          <p className="opacity-80 normal-case font-medium">Data hanya tersimpan di perangkat ini (Local Storage). Untuk sinkronisasi antar perangkat (Owner & Pelanggan), silakan hubungkan Firebase API Key di Environment Variables.</p>
+        <div className="bg-red-500 text-white px-6 py-2 text-[10px] font-bold text-center uppercase tracking-widest z-50">
+          Firebase Belum Dikonfigurasi - Data Tidak Akan Tersimpan/Muncul
         </div>
       )}
       {/* Header */}
@@ -1427,17 +1275,8 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
                       </button>
                       <input 
                         type="number"
-                        value={item.stock === 0 ? '' : item.stock}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          if (val === '') {
-                            onUpdateStock(item.id, 0);
-                          } else {
-                            onUpdateStock(item.id, parseFloat(val) || 0);
-                          }
-                        }}
-                        onFocus={(e) => e.target.select()}
-                        placeholder="0"
+                        value={item.stock}
+                        onChange={(e) => onUpdateStock(item.id, parseFloat(e.target.value) || 0)}
                         className="w-16 text-center font-bold text-[#3D2B1F] text-sm bg-[#F5F2EA] rounded-lg py-1"
                       />
                       <span className="text-xs font-bold text-[#3D2B1F]/40">{item.unit}</span>
@@ -1474,9 +1313,9 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
                 <div>
                   <h3 className="font-bold text-[#3D2B1F]">Owner Account</h3>
                   <p className="text-xs text-[#3D2B1F]/60">indominite@gmail.com</p>
-                  <div className={`flex items-center gap-1 mt-1 ${isFirebaseConfigured ? 'text-green-600 bg-green-50' : 'text-orange-600 bg-orange-50'} px-2 py-0.5 rounded-full w-fit`}>
-                    {isFirebaseConfigured ? <CheckCircle size={10} /> : <AlertTriangle size={10} />}
-                    <span className="text-[9px] font-bold">{isFirebaseConfigured ? 'Terhubung & Sinkronisasi Otomatis' : 'Mode Offline (Local Storage)'}</span>
+                  <div className="flex items-center gap-1 mt-1 text-green-600 bg-green-50 px-2 py-0.5 rounded-full w-fit">
+                    <CheckCircle size={10} />
+                    <span className="text-[9px] font-bold">Terhubung & Sinkronisasi Otomatis</span>
                   </div>
                 </div>
               </div>
@@ -1496,42 +1335,6 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
               >
                 <LogOut size={20} /> Keluar
               </button>
-
-              {!isFirebaseConfigured && (
-                <div className="mt-6 p-4 bg-orange-50 rounded-2xl border border-orange-100">
-                  <h4 className="text-xs font-bold text-orange-800 mb-2 flex items-center gap-2">
-                    <AlertTriangle size={14} /> Status Konfigurasi (Debug)
-                  </h4>
-                  <div className="space-y-2 mt-3">
-                    {[
-                      { key: 'API_KEY', val: import.meta.env.VITE_FIREBASE_API_KEY },
-                      { key: 'APP_ID', val: import.meta.env.VITE_FIREBASE_APP_ID },
-                      { key: 'PROJECT_ID', val: import.meta.env.VITE_FIREBASE_PROJECT_ID },
-                      { key: 'AUTH_DOMAIN', val: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN },
-                    ].map((item) => {
-                      const isSet = !!item.val && item.val !== 'YOUR_FIREBASE_API_KEY';
-                      const hasQuote = item.val?.includes('"');
-                      return (
-                        <div key={item.key} className="flex items-center justify-between bg-white/50 p-2 rounded-lg border border-orange-200">
-                          <span className="text-[9px] font-mono font-bold text-orange-900">{item.key}</span>
-                          <div className="flex items-center gap-2">
-                            {hasQuote && <span className="text-[8px] bg-red-100 text-red-600 px-1 rounded font-bold">ADA TANDA KUTIP!</span>}
-                            <span className={`text-[9px] font-bold ${isSet ? 'text-green-600' : 'text-red-500'}`}>
-                              {isSet ? 'TERDETEKSI' : 'KOSONG'}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <p className="text-[9px] text-orange-700 leading-relaxed mt-4 bg-white/40 p-2 rounded-lg">
-                    <span className="font-bold block mb-1">Solusi Cepat:</span>
-                    1. Pastikan di Vercel "Key" di kiri dan "Value" di kanan.<br/>
-                    2. Hapus tanda kutip (") jika ada di ujung teks.<br/>
-                    3. <b>WAJIB REDEPLOY</b> di tab Deployments Vercel setelah simpan.
-                  </p>
-                </div>
-              )}
             </div>
           </div>
         )}
@@ -1575,11 +1378,13 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
 function HomeScreen({ 
   address, addresses, setAddresses, customerName, customerPhone, customerEmail, onCheckout, onSelectItem, hasActiveOrder, 
   activeTab, setActiveTab, activeCategory, setActiveCategory, searchQuery, setSearchQuery,
-  onAddressChange, onViewStatus, cart, onLogout, userRole, onOpenOwnerDashboard, onUpdateProfile, orders
+  onAddressChange, onViewOrders, cart, onLogout, userRole, onOpenOwnerDashboard, onUpdateProfile, orders, onBackToWelcome,
+  onRemoveFromCart
 }: { 
   address: string, addresses: any[], setAddresses: React.Dispatch<React.SetStateAction<any[]>>, customerName: string, customerPhone: string, customerEmail: string, onCheckout: () => void, onSelectItem: (item: any) => void, hasActiveOrder: boolean, 
   activeTab: string, setActiveTab: (t: string) => void, activeCategory: string, setActiveCategory: (c: string) => void, searchQuery: string, setSearchQuery: (q: string) => void,
-  onAddressChange: (addr: string) => void, onViewStatus?: () => void, cart?: CartItem[], onLogout?: () => void, userRole?: 'guest' | 'customer' | 'owner', onOpenOwnerDashboard?: () => void, onUpdateProfile?: (name: string, phone: string, email: string) => void, orders: Order[]
+  onAddressChange: (addr: string) => void, onViewOrders?: () => void, cart?: CartItem[], onLogout?: () => void, userRole?: 'guest' | 'customer' | 'owner', onOpenOwnerDashboard?: () => void, onUpdateProfile?: (name: string, phone: string, email: string) => void, orders: Order[], onBackToWelcome: () => void,
+  onRemoveFromCart?: (index: number) => void
 }) {
   const [notification, setNotification] = useState<string | null>(null);
   const [profileSubView, setProfileSubView] = useState<string | null>(null);
@@ -1602,7 +1407,7 @@ function HomeScreen({
   }, [customerName, customerEmail, customerPhone]);
 
 
-  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('cash');
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('TUNAI');
   const [notifSettings, setNotifSettings] = useState({
     promo: true,
     status: true,
@@ -1696,18 +1501,6 @@ function HomeScreen({
       categories: ['Snack', 'Spesial Buat Kamu'],
       description: 'Lembut, gurih, dan bikin nagih.'
     },
-    { 
-      name: 'Es Teh Segar', 
-      type: 'Drink • Segar', 
-      price: 'Rp 5.000', 
-      priceNum: 5000,
-      rating: '4.8', 
-      time: '1-3 min', 
-      delivery: 'Gratis Ongkir', 
-      img: 'https://raw.githubusercontent.com/Dinni-hub/es-teh/main/download%20(8).jpg', 
-      categories: ['Drink', 'Spesial Buat Kamu'],
-      description: 'Segar, manisnya pas, cocok buat teman nyemil'
-    },
   ];
 
   return (
@@ -1736,8 +1529,17 @@ function HomeScreen({
         <div className="flex-1 overflow-y-auto pb-40">
           {/* Header */}
           <div className="px-6 pt-4 flex items-center justify-between">
-            <div>
-              <p className="text-[10px] uppercase tracking-widest font-bold text-[#3D2B1F]/50">{getGreeting()}</p>
+            <div className="flex items-center gap-3">
+              <button 
+                onClick={onBackToWelcome}
+                className="h-10 w-10 flex items-center justify-center rounded-full hover:bg-[#3D2B1F]/5 transition-colors"
+              >
+                <ArrowLeft size={20} className="text-[#3D2B1F]" />
+              </button>
+              <div>
+                <p className="text-[10px] uppercase tracking-widest font-bold text-[#3D2B1F]/50">{getGreeting()}</p>
+                <h2 className="text-xl font-serif font-bold text-[#3D2B1F]">{userProfile.name || 'Pelanggan'}</h2>
+              </div>
             </div>
             <div className="flex items-center gap-3">
               <button className="h-12 w-12 rounded-full bg-white flex items-center justify-center shadow-sm border border-[#3D2B1F]/5">
@@ -1770,7 +1572,6 @@ function HomeScreen({
               {[
                 { name: 'Mie', icon: <Utensils size={20} /> },
                 { name: 'Snack', icon: <Cookie size={20} /> },
-                { name: 'Drink', icon: <Coffee size={20} /> },
               ].map((cat, i) => (
                 <button 
                   key={i} 
@@ -1912,43 +1713,38 @@ function HomeScreen({
             >
               <ArrowLeft size={20} />
             </button>
-            <h2 className="text-3xl font-serif text-[#3D2B1F]">Riwayat Pembelian</h2>
+            <h2 className="text-3xl font-serif text-[#3D2B1F]">Riwayat Pesanan</h2>
           </div>
           
-          {(() => {
-            // Filter orders for this user. If offline, show all local orders.
-            const userOrders = orders.filter(o => 
-              o.customerName === (customerName || 'Pelanggan') || 
-              (customerPhone && o.customerPhone === customerPhone) ||
-              !import.meta.env.VITE_FIREBASE_API_KEY // If offline, show all
-            );
-
-            return userOrders.length > 0 ? (
-              <div className="space-y-4">
-                {userOrders.map((order) => (
-                  <div key={order.id} className="bg-white p-4 rounded-[2rem] border border-[#3D2B1F]/5 shadow-sm">
-                    <div className="flex justify-between items-center mb-2">
-                      <span className="text-xs font-bold text-[#3D2B1F]/60">#{order.id.slice(0, 8)}</span>
-                      <span className="text-xs font-bold text-[#3D2B1F]">{order.timestamp.toLocaleDateString()}</span>
+          {orders.filter(o => o.customerName === customerName).length > 0 ? (
+            <div className="space-y-4">
+              {orders.filter(o => o.customerName === customerName).map((order) => (
+                <div key={order.id} className="bg-white p-4 rounded-[2rem] border border-[#3D2B1F]/5 shadow-sm">
+                  <div className="flex justify-between items-center mb-2">
+                    <div className="flex flex-col">
+                      <span className="text-xs font-bold text-[#3D2B1F]/60">#{order.id}</span>
+                      <span className={`text-[10px] font-bold uppercase ${order.status === 'selesai' ? 'text-green-500' : order.status === 'dibatalkan' ? 'text-red-500' : 'text-orange-500'}`}>
+                        {order.status}
+                      </span>
                     </div>
-                    <div className="space-y-1 mb-3">
-                      {order.items.map((item, i) => (
-                        <p key={i} className="text-sm text-[#3D2B1F]">{item.item.name} x{item.quantity}</p>
-                      ))}
-                    </div>
-                    <div className="text-xs text-[#3D2B1F]/70">
-                      <p>Status: <span className="font-bold uppercase text-[#D4AF37]">{order.status}</span></p>
-                      <p>Alamat: {order.customerAddress || '-'}</p>
-                      <p>Pembayaran: {order.paymentMethod || '-'}</p>
-                      <p className="font-bold mt-1 text-sm text-[#3D2B1F]">Total: Rp {order.total.toLocaleString()}</p>
-                    </div>
+                    <span className="text-xs font-bold text-[#3D2B1F]">{order.timestamp.toLocaleDateString()}</span>
                   </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-center text-[#3D2B1F]/40 py-10">Belum ada riwayat pembelian.</p>
-            );
-          })()}
+                  <div className="space-y-1 mb-3">
+                    {order.items.map((item, i) => (
+                      <p key={i} className="text-sm text-[#3D2B1F]">{item.item.name} x{item.quantity}</p>
+                    ))}
+                  </div>
+                  <div className="text-xs text-[#3D2B1F]/70">
+                    <p>Alamat: {order.customerAddress || '-'}</p>
+                    <p>Pembayaran: {order.paymentMethod || '-'}</p>
+                    <p className="font-bold mt-1">Total: Rp {order.total.toLocaleString()}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-center text-[#3D2B1F]/40 py-10">Belum ada riwayat pembelian.</p>
+          )}
         </div>
       )}
 
@@ -1982,6 +1778,12 @@ function HomeScreen({
                       </p>
                     )}
                   </div>
+                  <button 
+                    onClick={() => onRemoveFromCart && onRemoveFromCart(idx)}
+                    className="h-10 w-10 flex items-center justify-center rounded-full text-red-500 hover:bg-red-50 transition-colors"
+                  >
+                    <Trash2 size={18} />
+                  </button>
                 </div>
               ))}
               
@@ -2038,10 +1840,10 @@ function HomeScreen({
                 <p className="text-[#3D2B1F]/60 font-bold">Ada pesanan aktif!</p>
                 <p className="text-xs text-[#3D2B1F]/40 mt-1">Pesanan spesialmu sedang dalam proses.</p>
                 <button 
-                  onClick={() => onViewStatus && onViewStatus()}
+                  onClick={() => onViewOrders && onViewOrders()}
                   className="mt-8 px-8 py-3 bg-[#D4AF37] text-white rounded-xl font-bold text-sm shadow-lg shadow-[#D4AF37]/30"
                 >
-                  Lihat Status Pesanan
+                  Lihat Orders
                 </button>
               </>
             ) : (
@@ -2187,35 +1989,35 @@ function HomeScreen({
                 <div className="space-y-4 pb-36">
 
                   <div 
-                    onClick={() => setSelectedPaymentMethod('qris')}
-                    className={`p-5 rounded-2xl border flex items-center justify-between cursor-pointer transition-all ${selectedPaymentMethod === 'qris' ? 'bg-[#3D2B1F] text-white border-[#3D2B1F] shadow-lg' : 'bg-white text-[#3D2B1F] border-[#3D2B1F]/5 shadow-sm'}`}
+                    onClick={() => setSelectedPaymentMethod('QRIS')}
+                    className={`p-5 rounded-2xl border flex items-center justify-between cursor-pointer transition-all ${selectedPaymentMethod === 'QRIS' ? 'bg-[#3D2B1F] text-white border-[#3D2B1F] shadow-lg' : 'bg-white text-[#3D2B1F] border-[#3D2B1F]/5 shadow-sm'}`}
                   >
                     <div className="flex items-center gap-4">
-                      <div className={`h-12 w-12 rounded-xl flex items-center justify-center ${selectedPaymentMethod === 'qris' ? 'bg-white/10' : 'bg-blue-50 text-blue-600'}`}>
+                      <div className={`h-12 w-12 rounded-xl flex items-center justify-center ${selectedPaymentMethod === 'QRIS' ? 'bg-white/10' : 'bg-blue-50 text-blue-600'}`}>
                         <QrCode size={24} />
                       </div>
                       <div>
                         <p className="font-bold">QRIS</p>
-                        <p className={`text-xs ${selectedPaymentMethod === 'qris' ? 'text-white/60' : 'text-[#3D2B1F]/40'}`}>Scan & Bayar</p>
+                        <p className={`text-xs ${selectedPaymentMethod === 'QRIS' ? 'text-white/60' : 'text-[#3D2B1F]/40'}`}>Scan & Bayar</p>
                       </div>
                     </div>
-                    {selectedPaymentMethod === 'qris' ? <CheckCircle size={20} /> : <div className="text-[#D4AF37] text-xs font-bold">PILIH</div>}
+                    {selectedPaymentMethod === 'QRIS' ? <CheckCircle size={20} /> : <div className="text-[#D4AF37] text-xs font-bold">PILIH</div>}
                   </div>
 
                   <div 
-                    onClick={() => setSelectedPaymentMethod('cash')}
-                    className={`p-5 rounded-2xl border flex items-center justify-between cursor-pointer transition-all ${selectedPaymentMethod === 'cash' ? 'bg-[#3D2B1F] text-white border-[#3D2B1F] shadow-lg' : 'bg-white text-[#3D2B1F] border-[#3D2B1F]/5 shadow-sm'}`}
+                    onClick={() => setSelectedPaymentMethod('TUNAI')}
+                    className={`p-5 rounded-2xl border flex items-center justify-between cursor-pointer transition-all ${selectedPaymentMethod === 'TUNAI' ? 'bg-[#3D2B1F] text-white border-[#3D2B1F] shadow-lg' : 'bg-white text-[#3D2B1F] border-[#3D2B1F]/5 shadow-sm'}`}
                   >
                     <div className="flex items-center gap-4">
-                      <div className={`h-12 w-12 rounded-xl flex items-center justify-center ${selectedPaymentMethod === 'cash' ? 'bg-white/10' : 'bg-green-50 text-green-600'}`}>
+                      <div className={`h-12 w-12 rounded-xl flex items-center justify-center ${selectedPaymentMethod === 'TUNAI' ? 'bg-white/10' : 'bg-green-50 text-green-600'}`}>
                         <Banknote size={24} />
                       </div>
                       <div>
-                        <p className="font-bold">Tunai (Cash)</p>
-                        <p className={`text-xs ${selectedPaymentMethod === 'cash' ? 'text-white/60' : 'text-[#3D2B1F]/40'}`}>Bayar di Tempat</p>
+                        <p className="font-bold">TUNAI</p>
+                        <p className={`text-xs ${selectedPaymentMethod === 'TUNAI' ? 'text-white/60' : 'text-[#3D2B1F]/40'}`}>Bayar di Tempat</p>
                       </div>
                     </div>
-                    {selectedPaymentMethod === 'cash' ? <CheckCircle size={20} /> : <div className="text-[#D4AF37] text-xs font-bold">PILIH</div>}
+                    {selectedPaymentMethod === 'TUNAI' ? <CheckCircle size={20} /> : <div className="text-[#D4AF37] text-xs font-bold">PILIH</div>}
                   </div>
                 </div>
               )}
@@ -2259,7 +2061,7 @@ function HomeScreen({
                 <div className="space-y-4 pb-36">
                   {[
                     { key: 'promo', title: 'Promo & Penawaran', desc: 'Dapatkan info diskon terbaru' },
-                    { key: 'status', title: 'Status Pesanan', desc: 'Update real-time pesananmu' },
+                    { key: 'orders', title: 'Status Pesanan', desc: 'Update real-time pesananmu' },
                     { key: 'newsletter', title: 'Email Newsletter', desc: 'Berita kuliner mingguan' }
                   ].map((notif) => (
                     <div key={notif.key} className="bg-white p-5 rounded-2xl border border-[#3D2B1F]/5 shadow-sm flex items-center justify-between">
@@ -2302,7 +2104,7 @@ function HomeScreen({
                     <p className="text-[10px] font-bold uppercase tracking-widest text-[#3D2B1F]/40 ml-2 mt-4">Pertanyaan Populer</p>
                     {[
                       { q: 'Cara membatalkan pesanan', a: 'Anda dapat membatalkan pesanan dalam waktu 1 menit setelah pemesanan dilakukan melalui tab Orders.' },
-                      { q: 'Metode pembayaran tersedia', a: 'Kami menerima pembayaran Tunai dan QRIS.' },
+                      { q: 'Metode pembayaran tersedia', a: 'Kami menerima pembayaran Tunai saat pemesanan.' },
                       { q: 'Area jangkauan pengiriman', a: 'Saat ini kami melayani pengiriman untuk area kampus dan sekitarnya dalam radius 1km.' }
                     ].map((faq, i) => (
                       <div key={i} className="bg-white rounded-xl border border-[#3D2B1F]/5 overflow-hidden">
@@ -2400,8 +2202,8 @@ function HomeScreen({
         </button>
         <button 
           onClick={() => {
-            if (hasActiveOrder && onViewStatus) {
-              onViewStatus();
+            if (hasActiveOrder && onViewOrders) {
+              onViewOrders();
             } else {
               setActiveTab('orders');
             }
@@ -2428,7 +2230,7 @@ function HomeScreen({
   );
 }
 
-function CheckoutScreen({ address, onAddressChange, paymentMethod, onPaymentMethodChange, cart, onBack, onOrderPlaced, customerName, customerPhone, customerEmail, onUpdateProfile }: { address: string, onAddressChange: (addr: string) => void, paymentMethod: string, onPaymentMethodChange: (method: string) => void, cart: CartItem[], onBack: () => void, onOrderPlaced: () => void, customerName: string, customerPhone: string, customerEmail: string, onUpdateProfile: (name: string, phone: string, email: string) => void }) {
+function CheckoutScreen({ address, onAddressChange, paymentMethod, onPaymentMethodChange, cart, onBack, onOrderPlaced, customerName, customerPhone, customerEmail, onUpdateProfile }: { address: string, onAddressChange: (addr: string) => void, paymentMethod: string, onPaymentMethodChange: (method: string) => void, cart: CartItem[], onBack: () => void, onOrderPlaced: (name: string, phone: string, email: string, addr: string) => void, customerName: string, customerPhone: string, customerEmail: string, onUpdateProfile: (name: string, phone: string, email: string) => void }) {
   const [name, setName] = useState(customerName);
   const [phone, setPhone] = useState(customerPhone);
   const [email, setEmail] = useState(customerEmail);
@@ -2441,7 +2243,6 @@ function CheckoutScreen({ address, onAddressChange, paymentMethod, onPaymentMeth
   const toppingsPriceMap: {[key: string]: number} = {
     'Telur Rebus': 3000,
     'Extra Es Batu': 1000,
-    'Extra Gula': 1000,
     'Sosis': 1000,
   };
 
@@ -2478,9 +2279,6 @@ function CheckoutScreen({ address, onAddressChange, paymentMethod, onPaymentMeth
                 <p className="font-serif font-bold text-[#3D2B1F]">{cartItem.item.name}</p>
                 {(!cartItem.item.categories.includes('Snack') || cartItem.item.name === 'Telur Gulung') && (
                   <div className="text-[11px] text-[#3D2B1F]/50 mt-1 space-y-0.5">
-                    {cartItem.spiciness > 0 && (
-                      <p>Level {cartItem.spiciness} (+Rp {(cartItem.spiciness * 1000).toLocaleString()})</p>
-                    )}
                     {cartItem.toppings.length > 0 && (
                       <p>{cartItem.toppings.join(', ')} (+Rp {cartItem.toppings.reduce((acc: number, t: string) => acc + (toppingsPriceMap[t] || 0), 0).toLocaleString()})</p>
                     )}
@@ -2500,10 +2298,9 @@ function CheckoutScreen({ address, onAddressChange, paymentMethod, onPaymentMeth
       </div>
 
       {/* Customer Info Form */}
-      {(!customerName || !customerPhone) && (
-        <div className="px-6 mt-10">
-          <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#3D2B1F]/50 mb-3">Informasi Pemesan</h3>
-          <div className="space-y-4">
+      <div className="px-6 mt-10">
+        <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#3D2B1F]/50 mb-3">Informasi Pemesan</h3>
+        <div className="space-y-4">
             <div>
               <label className="text-xs font-bold uppercase tracking-widest text-[#3D2B1F]/40 ml-2 mb-1 block">Nama Lengkap *</label>
               <input 
@@ -2536,7 +2333,6 @@ function CheckoutScreen({ address, onAddressChange, paymentMethod, onPaymentMeth
             {error && <p className="text-red-500 text-xs font-bold ml-2">{error}</p>}
           </div>
         </div>
-      )}
 
 
 
@@ -2545,27 +2341,27 @@ function CheckoutScreen({ address, onAddressChange, paymentMethod, onPaymentMeth
         <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#3D2B1F]/50 mb-3">Metode Pembayaran</h3>
         <div className="space-y-3">
           <button 
-            onClick={() => onPaymentMethodChange('qris')}
-            className={`w-full p-5 rounded-2xl flex items-center gap-4 transition-all ${paymentMethod === 'qris' ? 'bg-[#3D2B1F]/10 border-2 border-[#3D2B1F] text-[#3D2B1F]' : 'bg-[#3D2B1F]/5 border border-[#3D2B1F]/10 text-[#3D2B1F]'}`}
+            onClick={() => onPaymentMethodChange('QRIS')}
+            className={`w-full p-5 rounded-2xl flex items-center gap-4 transition-all ${paymentMethod === 'QRIS' ? 'bg-[#3D2B1F]/10 border-2 border-[#3D2B1F] text-[#3D2B1F]' : 'bg-[#3D2B1F]/5 border border-[#3D2B1F]/10 text-[#3D2B1F]'}`}
           >
             <QrCode size={20} className="text-[#3D2B1F]" />
             <div className="flex-1 text-left">
               <p className="text-sm font-bold text-[#3D2B1F]">QRIS</p>
               <p className="text-[9px] font-bold uppercase tracking-widest text-[#3D2B1F]">SCAN UNTUK MEMBAYAR</p>
             </div>
-            {paymentMethod === 'qris' && <CheckCircle size={20} className="text-[#3D2B1F]" />}
+            {paymentMethod === 'QRIS' && <CheckCircle size={20} className="text-[#3D2B1F]" />}
           </button>
 
           <button 
-            onClick={() => onPaymentMethodChange('cash')}
-            className={`w-full p-5 rounded-2xl flex items-center gap-4 transition-all ${paymentMethod === 'cash' ? 'bg-[#3D2B1F]/10 border-2 border-[#3D2B1F] text-[#3D2B1F]' : 'bg-[#3D2B1F]/5 border border-[#3D2B1F]/10 text-[#3D2B1F]'}`}
+            onClick={() => onPaymentMethodChange('TUNAI')}
+            className={`w-full p-5 rounded-2xl flex items-center gap-4 transition-all ${paymentMethod === 'TUNAI' ? 'bg-[#3D2B1F]/10 border-2 border-[#3D2B1F] text-[#3D2B1F]' : 'bg-[#3D2B1F]/5 border border-[#3D2B1F]/10 text-[#3D2B1F]'}`}
           >
             <Banknote size={20} className="text-[#3D2B1F]" />
             <div className="flex-1 text-left">
-              <p className="text-sm font-bold text-[#3D2B1F]">Tunai (Cash)</p>
+              <p className="text-sm font-bold text-[#3D2B1F]">TUNAI</p>
               <p className="text-[9px] font-bold uppercase tracking-widest text-[#3D2B1F]">SIAPKAN UANG PAS YA!</p>
             </div>
-            {paymentMethod === 'cash' && <CheckCircle size={20} className="text-[#3D2B1F]" />}
+            {paymentMethod === 'TUNAI' && <CheckCircle size={20} className="text-[#3D2B1F]" />}
           </button>
         </div>
       </div>
@@ -2591,14 +2387,12 @@ function CheckoutScreen({ address, onAddressChange, paymentMethod, onPaymentMeth
       <div className="w-full px-6 pb-10 pt-4">
         <motion.button 
           onClick={() => {
-            if (!customerName || !customerPhone) {
-              if (!name || !phone) {
-                setError('Mohon isi Nama dan Nomor WhatsApp.');
-                return;
-              }
-              onUpdateProfile(name, phone, email);
+            if (!name || !phone || !address) {
+              setError('Mohon lengkapi Nama, Nomor WhatsApp, dan Alamat Pengiriman.');
+              return;
             }
-            onOrderPlaced();
+            onUpdateProfile(name, phone, email);
+            onOrderPlaced(name, phone, email, address);
           }}
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}
@@ -2616,15 +2410,9 @@ function CheckoutScreen({ address, onAddressChange, paymentMethod, onPaymentMeth
 function DetailScreen({ item, onBack, onAddToCart, onBuyNow }: { item: any, onBack: () => void, onAddToCart: (cartDetails: CartItem) => void, onBuyNow: (cartDetails: CartItem) => void }) {
   const [quantity, setQuantity] = useState(1);
   const [selectedToppings, setSelectedToppings] = useState<string[]>([]);
-  const [spiciness, setSpiciness] = useState(0);
   const [notes, setNotes] = useState('');
 
-  const toppings = item.name === 'Es Teh Segar' 
-    ? [
-        { name: 'Extra Es Batu', price: 1000 },
-        { name: 'Extra Gula', price: 1000 }
-      ]
-    : item.name === 'Telur Gulung'
+  const toppings = item.name === 'Telur Gulung'
     ? [
         { name: 'Sosis', price: 1000 }
       ]
@@ -2633,7 +2421,6 @@ function DetailScreen({ item, onBack, onAddToCart, onBuyNow }: { item: any, onBa
       ];
 
   const isSnack = item.categories.includes('Snack');
-  const isDrink = item.categories.includes('Drink');
 
   const toggleTopping = (name: string) => {
     setSelectedToppings(prev => 
@@ -2641,20 +2428,18 @@ function DetailScreen({ item, onBack, onAddToCart, onBuyNow }: { item: any, onBa
     );
   };
 
-  const spicinessCost = 0;
   const toppingsCost = selectedToppings.reduce((acc, t) => {
     const topping = toppings.find(top => top.name === t);
     return acc + (topping?.price || 0);
   }, 0);
 
-  const totalPrice = (item.priceNum + toppingsCost + spicinessCost) * quantity;
+  const totalPrice = (item.priceNum + toppingsCost) * quantity;
 
   const handleAddToCart = () => {
     onAddToCart({
       item,
       quantity,
       toppings: selectedToppings,
-      spiciness: spiciness,
       totalPrice,
       notes
     });
@@ -2665,7 +2450,6 @@ function DetailScreen({ item, onBack, onAddToCart, onBuyNow }: { item: any, onBa
       item,
       quantity,
       toppings: selectedToppings,
-      spiciness: spiciness,
       totalPrice,
       notes
     });
@@ -2714,7 +2498,7 @@ function DetailScreen({ item, onBack, onAddToCart, onBuyNow }: { item: any, onBa
           <>
             <div className="mb-6">
               <h3 className="text-lg font-bold text-[#3D2B1F] mb-4">
-                {isDrink ? 'Kustomisasi Minuman' : 'Add On'}
+                Add On
               </h3>
               <div className="space-y-3">
                 {toppings.map((topping, i) => (
@@ -2744,7 +2528,7 @@ function DetailScreen({ item, onBack, onAddToCart, onBuyNow }: { item: any, onBa
           <textarea 
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            placeholder={item.name === 'Telur Gulung' ? "Contoh: tanpa saus, saus pedas, saus tomat" : isDrink ? "Contoh: Es sedikit, gula sedikit..." : isSnack ? "Contoh: Bumbu dipisah, ekstra pedas..." : "Contoh: Telur setengah matang, tanpa bumbu pedas..."}
+            placeholder={item.name === 'Telur Gulung' ? "Contoh: tanpa saus, saus pedas, saus tomat" : isSnack ? "Contoh: Bumbu dipisah, ekstra pedas..." : "Contoh: Telur setengah matang, tanpa bumbu pedas..."}
             className="w-full h-24 bg-white rounded-3xl p-6 text-sm font-medium border border-[#3D2B1F]/5 shadow-sm focus:outline-none focus:ring-2 focus:ring-[#3D2B1F]/10 resize-none"
           ></textarea>
         </div>
@@ -2761,20 +2545,18 @@ function DetailScreen({ item, onBack, onAddToCart, onBuyNow }: { item: any, onBa
               </button>
               <input 
                 type="number" 
-                value={quantity === 0 ? '' : quantity}
+                value={quantity}
                 onChange={(e) => {
                   const val = parseInt(e.target.value);
                   if (!isNaN(val) && val > 0) {
                     setQuantity(val);
                   } else if (e.target.value === '') {
-                    setQuantity(0 as any);
+                    setQuantity('' as any);
                   }
                 }}
-                onFocus={(e) => e.target.select()}
                 onBlur={() => {
                   if (!quantity || quantity < 1) setQuantity(1);
                 }}
-                placeholder="1"
                 className="text-xl font-bold text-[#3D2B1F] w-16 text-center bg-transparent outline-none"
               />
               <button 
@@ -2811,56 +2593,21 @@ function DetailScreen({ item, onBack, onAddToCart, onBuyNow }: { item: any, onBa
   );
 }
 
-function StatusScreen({ onBack, onGoHome, activeOrder, onClearOrder, cart, onExtendOrder, customerName, customerPhone, customerEmail }: { onBack: () => void, onGoHome: (tab?: string) => void, activeOrder: any, onClearOrder?: () => void, cart?: CartItem[], onExtendOrder: () => void, customerName: string, customerPhone: string, customerEmail: string }) {
-  const [timeLeft, setTimeLeft] = useState(0);
-  const hasActiveOrder = !!activeOrder;
-  const navItems: NavItem[] = [
-    { id: 'home', label: 'Home', icon: Home },
-    { id: 'cart', label: 'Keranjang', icon: ShoppingBag, badge: cart && cart.length > 0 },
-    { id: 'orders', label: 'Orders', icon: ReceiptText, badge: hasActiveOrder },
-    { id: 'profile', label: 'Profile', icon: User },
-  ];
+function OrdersScreen({ onBack, onGoHome, orders, cart, customerName }: { onBack: () => void, onGoHome: (tab?: string) => void, orders: Order[], cart?: CartItem[], customerName: string }) {
+  const [now, setNow] = useState(Date.now());
+  const activeOrders = orders.filter(o => o.status !== 'selesai' && o.status !== 'dibatalkan' && o.customerName === customerName);
+  const cancelledOrders = orders.filter(o => o.status === 'dibatalkan' && o.customerName === customerName);
+  const hasActiveOrder = activeOrders.length > 0;
+  const hasAnyOrder = activeOrders.length > 0 || cancelledOrders.length > 0;
 
-  // Update timer display
   useEffect(() => {
-    if (!activeOrder || activeOrder.status === 'selesai') {
-      setTimeLeft(0);
-      return;
-    }
-
-    const updateTimer = () => {
-      const elapsed = (Date.now() - activeOrder.startTime) / 1000;
-      const duration = activeOrder.isExtended ? 900 : 600;
-      const remaining = Math.max(0, duration - elapsed);
-      setTimeLeft(remaining);
-      
-      // Check for extension need (simulated at 0)
-      if (remaining === 0 && !activeOrder.isExtended && activeOrder.status !== 'selesai') {
-         onExtendOrder();
-      }
-    };
-
-    updateTimer();
-    const interval = setInterval(updateTimer, 1000);
+    const interval = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(interval);
-  }, [activeOrder, onExtendOrder]);
-
-  const orderStatus = activeOrder?.status || 'diterima';
-  const isExtended = activeOrder?.isExtended || false;
-
-
+  }, []);
 
   const handleProfileClick = () => {
     onGoHome('profile');
   };
-
-
-
-  const handleOrdersClick = () => {
-    onGoHome('orders');
-  };
-
-  const dots = Array.from({ length: 120 });
 
   return (
     <motion.div 
@@ -2882,8 +2629,8 @@ function StatusScreen({ onBack, onGoHome, activeOrder, onClearOrder, cart, onExt
         <h2 className="flex-1 text-center text-xl font-serif font-bold pr-10 text-[#3D2B1F]">Status Pesanan</h2>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
-        {!hasActiveOrder ? (
+      <div className="flex-1 overflow-y-auto pb-40">
+        {!hasAnyOrder ? (
           <div className="flex flex-col items-center justify-center text-center px-8 pt-20 pb-10">
             <div className="w-24 h-24 rounded-full bg-[#3D2B1F]/5 flex items-center justify-center mb-6">
               <ReceiptText size={40} className="text-[#3D2B1F]/40" />
@@ -2900,128 +2647,134 @@ function StatusScreen({ onBack, onGoHome, activeOrder, onClearOrder, cart, onExt
             </button>
           </div>
         ) : (
-          <div className="pb-40">
-            {/* Banner Animation Area */}
-            <div className="relative w-full h-64 mb-8 bg-[#3D2B1F]/5 overflow-hidden rounded-b-[3rem] shadow-sm shrink-0">
-              {/* Blurred Background to fill the rectangle */}
-              <video 
-                autoPlay 
-                loop 
-                muted 
-                playsInline
-                className="absolute inset-0 w-full h-full object-cover blur-xl opacity-50 scale-125"
-              >
-                <source src="/video-elang.mp4" type="video/mp4" />
-              </video>
-              {/* Main Video */}
-              <video 
-                autoPlay 
-                loop 
-                muted 
-                playsInline
-                className="relative z-10 w-full h-full object-contain object-center"
-              >
-                <source src="/video-elang.mp4" type="video/mp4" />
-              </video>
-              {/* Gradient overlay to blend it in */}
-              <div className="absolute inset-x-0 bottom-0 h-1/2 z-20 bg-gradient-to-t from-[#F5F2EA] to-transparent"></div>
-            </div>
+          <div className="flex flex-col gap-8 pt-0">
+            {(() => {
+              // Use the most recent or first active order for the general status/timer
+              const primaryOrder = activeOrders[0];
+              const startTime = new Date(primaryOrder.timestamp).getTime();
+              const elapsed = (now - startTime) / 1000;
+              const duration = 600; // 10 minutes
+              const remaining = Math.max(0, duration - elapsed);
+              const orderStatus = primaryOrder.status;
 
-            <div className="px-8 flex flex-col items-center">
-              {/* Circular Countdown Timer */}
-              {orderStatus !== 'selesai' && (
-                <div className="flex flex-col items-center justify-center mb-10">
-                  <div className="relative w-56 h-56 flex items-center justify-center">
-                    {/* SVG Circle */}
-                    <svg viewBox="0 0 224 224" className="absolute inset-0 w-full h-full transform -rotate-90">
-                      {/* Track */}
-                      <circle
-                        cx="112"
-                        cy="112"
-                        r="100"
-                        stroke="#3D2B1F"
-                        strokeWidth="8"
-                        fill="transparent"
-                        className="opacity-10"
-                      />
-                      {/* Progress */}
-                      <circle
-                        cx="112"
-                        cy="112"
-                        r="100"
-                        stroke="#3D2B1F"
-                        strokeWidth="8"
-                        fill="transparent"
-                        strokeDasharray={2 * Math.PI * 100}
-                        strokeDashoffset={2 * Math.PI * 100 * (1 - timeLeft / (isExtended ? 900 : 600))}
-                        strokeLinecap="round"
-                        className="transition-all duration-1000 ease-linear"
-                      />
-                      {/* Dot Indicator */}
-                      <circle
-                        cx={112 + 100 * Math.cos((timeLeft / (isExtended ? 900 : 600)) * 2 * Math.PI)}
-                        cy={112 + 100 * Math.sin((timeLeft / (isExtended ? 900 : 600)) * 2 * Math.PI)}
-                        r="6"
-                        fill="#3D2B1F"
-                        className="transition-all duration-1000 ease-linear"
-                      />
-                    </svg>
+              return (
+                <div className="flex flex-col items-center">
+                  {/* Video at the top - Full Width */}
+                  <div className="w-full mb-8 rounded-b-[3.5rem] overflow-hidden shadow-2xl">
+                    <video
+                      src="/video-elang.mp4"
+                      autoPlay
+                      loop
+                      muted
+                      playsInline
+                      className="w-full object-cover aspect-video"
+                    />
+                  </div>
+
+                  {/* Content with Padding */}
+                  <div className="w-full px-6 flex flex-col items-center">
+                    {/* Circular Countdown Timer */}
+                    <div className="relative w-48 h-48 flex items-center justify-center mb-8">
+                      <svg viewBox="0 0 224 224" className="absolute inset-0 w-full h-full transform -rotate-90">
+                        <circle cx="112" cy="112" r="100" stroke="#3D2B1F" strokeWidth="6" fill="transparent" className="opacity-10" />
+                        <circle
+                          cx="112" cy="112" r="100" stroke="#3D2B1F" strokeWidth="6" fill="transparent"
+                          strokeDasharray={2 * Math.PI * 100}
+                          strokeDashoffset={2 * Math.PI * 100 * (1 - remaining / duration)}
+                          strokeLinecap="round"
+                          className="transition-all duration-1000 ease-linear"
+                        />
+                      </svg>
+                      
+                      <div className="flex flex-col items-center z-10">
+                        <span className="text-3xl font-mono font-bold text-[#3D2B1F] tracking-wider">
+                          {`00:${Math.floor(remaining / 60).toString().padStart(2, '0')}:${Math.floor(remaining % 60).toString().padStart(2, '0')}`}
+                        </span>
+                        <span className="text-xs font-medium text-[#3D2B1F]/60 mt-1">
+                          Estimasi 10 menit
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Status Text */}
+                    <div className="w-full text-center mb-8">
+                       <h3 className="text-xl font-serif font-bold text-[#3D2B1F] mb-2">
+                        {orderStatus === 'diterima' && 'Pesanan Diterima'}
+                        {orderStatus === 'dimasak' && 'Sedang Dimasak'}
+                        {orderStatus === 'diantar' && 'Sedang Diantar'}
+                       </h3>
+                       <p className="text-sm text-[#3D2B1F]/60">
+                        {orderStatus === 'diterima' && 'Menunggu koki menyiapkan pesananmu.'}
+                        {orderStatus === 'dimasak' && 'Harap tunggu sebentar, ya.'}
+                        {orderStatus === 'diantar' && 'Kurir sedang menuju ke tempatmu.'}
+                       </p>
+                    </div>
+
+                    {/* Quote Box */}
+                    <div className="w-full bg-[#3D2B1F]/5 rounded-[2rem] p-6 flex items-center gap-4 mb-8">
+                      <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center shadow-sm">
+                        <Utensils size={20} className="text-[#3D2B1F]" />
+                      </div>
+                      <p className="text-[#3D2B1F] font-serif italic font-medium">
+                        "Pesanan spesialmu akan segera siap!"
+                      </p>
+                    </div>
                     
-                    {/* Time Display */}
-                    <div className="flex flex-col items-center z-10">
-                      <span className="text-3xl font-mono font-bold text-[#3D2B1F] tracking-wider">
-                        {`00:${Math.floor(timeLeft / 60).toString().padStart(2, '0')}:${Math.floor(timeLeft % 60).toString().padStart(2, '0')}`}
-                      </span>
-                      <span className="text-xs font-medium text-[#3D2B1F]/60 mt-2">
-                        {isExtended ? 'Tambahan 5 menit' : 'Estimasi 10 menit'}
-                      </span>
+                    {/* Order Details Cards - One for each active/cancelled order */}
+                    <div className="w-full space-y-6">
+                      {[...activeOrders, ...cancelledOrders].map((order) => (
+                        <div key={order.id} className={`w-full bg-white rounded-[2.5rem] p-6 shadow-sm border border-[#3D2B1F]/5 ${order.status === 'dibatalkan' ? 'opacity-60' : ''}`}>
+                          <div className="flex justify-between items-center mb-4">
+                            <div className="flex flex-col">
+                              <p className="text-xs font-bold text-[#3D2B1F] uppercase tracking-widest">Detail Pesanan</p>
+                              {order.status === 'dibatalkan' && (
+                                <span className="text-[10px] font-bold text-red-500 uppercase mt-0.5">Pesanan Dibatalkan</span>
+                              )}
+                            </div>
+                            <span className="text-[10px] font-bold text-[#3D2B1F]/40">#{order.id.slice(-4)}</span>
+                          </div>
+                          <div className="space-y-4">
+                            {order.items.map((item, idx) => (
+                              <div key={idx} className="flex justify-between items-start">
+                                <div className="flex-1">
+                                  <p className="text-sm font-bold text-[#3D2B1F]">
+                                    {item.quantity}x {item.item.name}
+                                  </p>
+                                  {item.toppings && item.toppings.length > 0 && (
+                                    <p className="text-xs text-[#3D2B1F]/60 mt-0.5">
+                                      Add On: {item.toppings.join(', ')}
+                                    </p>
+                                  )}
+                                  {item.notes && (
+                                    <p className="text-xs text-[#3D2B1F]/60 mt-0.5 italic">
+                                      Catatan: {item.notes}
+                                    </p>
+                                  )}
+                                </div>
+                                <p className="text-sm font-bold text-[#3D2B1F]">
+                                  Rp {item.totalPrice.toLocaleString()}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                          
+                          <div className="mt-4 pt-4 border-t border-[#3D2B1F]/5 space-y-2">
+                            <div className="flex justify-between items-center">
+                              <span className="text-xs font-bold text-[#3D2B1F]/60 uppercase tracking-widest">Metode Pembayaran</span>
+                              <span className="text-xs font-bold text-[#3D2B1F]">{order.paymentMethod}</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-xs font-bold text-[#3D2B1F]/60 uppercase tracking-widest">Total Pembayaran</span>
+                              <span className="text-lg font-serif font-bold text-[#3D2B1F]">Rp {order.total.toLocaleString()}</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 </div>
-              )}
-
-              {/* Status Text (Moved below timer) */}
-              <div className="w-full mb-8 text-center">
-                 <h3 className="text-xl font-serif font-bold text-[#3D2B1F] mb-1">
-                  {orderStatus === 'diterima' && 'Pesanan Diterima'}
-                  {orderStatus === 'dimasak' && 'Sedang Dimasak'}
-                  {orderStatus === 'diantar' && 'Sedang Diantar'}
-                  {orderStatus === 'selesai' && 'Pesanan Selesai'}
-                 </h3>
-                 <p className="text-sm text-[#3D2B1F]/60">
-                  {orderStatus === 'diterima' && 'Menunggu koki menyiapkan pesananmu.'}
-                  {orderStatus === 'dimasak' && 'Harap tunggu sebentar, ya.'}
-                  {orderStatus === 'diantar' && 'Kurir sedang menuju ke tempatmu.'}
-                  {orderStatus === 'selesai' && `Selamat menikmati pesanan spesialmu!`}
-                 </p>
-              </div>
-
-            {/* Quote Box */}
-            <div className="w-full bg-[#3D2B1F]/5 p-6 rounded-3xl flex items-center gap-4 border border-[#3D2B1F]/5 mb-6">
-              <div className="text-[#D4AF37]">
-                <Utensils size={24} />
-              </div>
-              <p className="text-sm font-serif italic text-[#3D2B1F]">
-                "Pesanan spesialmu akan segera siap!"
-              </p>
-            </div>
-
-            {/* Owner Simulation Button removed */}
-
-            {orderStatus === 'selesai' && (
-              <div className="w-full flex flex-col gap-4 mb-8">
-                <button 
-                  onClick={() => {
-                    if (onClearOrder) onClearOrder();
-                    onGoHome('riwayat');
-                  }}
-                  className="bg-[#3D2B1F] text-white px-8 py-4 rounded-full font-bold text-sm uppercase tracking-widest shadow-lg hover:bg-black transition-colors"
-                >
-                  Lihat Riwayat
-                </button>
-              </div>
-            )}
-            </div>
+              );
+            })()}
           </div>
         )}
       </div>
