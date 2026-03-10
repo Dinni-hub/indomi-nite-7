@@ -9,7 +9,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend 
 } from 'recharts';
 import { database } from "./services/firebaseService";
-import { ref, onValue, push, set, update } from "firebase/database";
+import { ref, onValue, push, set, update, limitToLast, query, onChildAdded } from "firebase/database";
 import { 
   Bell, ChevronDown, Search, 
   SlidersHorizontal, Flame, Utensils, Soup, IceCream, 
@@ -18,7 +18,7 @@ import {
   Circle, ShoppingBag, Minus, Plus, QrCode, Banknote,
   Settings, Lock, Phone, Mail, HelpCircle, LogOut, Trash2, BellRing, Bird, Cookie,
   AlertTriangle, TrendingUp, BarChart3, ShoppingCart,
-  Package, Egg, Leaf, Box, Droplet, Sparkles, X, Coffee, Camera
+  Package, Egg, Leaf, Box, Droplet, Sparkles, X, Coffee, Camera, Edit, Download, Pencil
 } from "lucide-react";
 import { BottomNav, NavItem } from "./components/BottomNav";
 
@@ -45,6 +45,33 @@ interface Order {
   status: 'diterima' | 'dimasak' | 'diantar' | 'selesai' | 'dibatalkan';
   paymentStatus: 'belum' | 'lunas';
 }
+
+const OWNER_WHATSAPP_NUMBER = '628123456789'; // GANTI DENGAN NOMOR WA OWNER (Gunakan kode negara, misal 628...)
+
+const generateReceiptText = (order: Order) => {
+  const time = order.timestamp.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+  
+  let text = `*PESANAN BARU - INDOMI NITE*\n`;
+  text += `--------------------------------\n`;
+  text += `Nama Pelanggan: ${order.customerName}\n`;
+  text += `Jam Pemesanan: ${time}\n`;
+  text += `--------------------------------\n`;
+  text += `*Menu Pesanan:*\n`;
+  order.items.forEach(cart => {
+    text += `- ${cart.item.name} x${cart.quantity}\n`;
+    if (cart.toppings.length > 0) {
+      text += `  Add on: ${cart.toppings.join(', ')}\n`;
+    }
+    if (cart.notes) {
+      text += `  Catatan: ${cart.notes}\n`;
+    }
+  });
+  text += `--------------------------------\n`;
+  text += `Total Pembayaran: Rp ${order.total.toLocaleString()}\n`;
+  text += `Metode Pembayaran: ${order.paymentMethod || 'TUNAI'}\n`;
+  text += `--------------------------------\n`;
+  return text;
+};
 
 export default function App() {
   const [view, setView] = useState<View>(() => {
@@ -92,6 +119,9 @@ export default function App() {
   const [customerEmail, setCustomerEmail] = useState(() => localStorage.getItem('app_customerEmail') || '');
   const [customerAddress, setCustomerAddress] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('TUNAI');
+
+  const [newOrderAlert, setNewOrderAlert] = useState<any | null>(null);
+
   const [inventory, setInventory] = useState(() => {
     try {
       const saved = localStorage.getItem('app_inventory');
@@ -207,9 +237,74 @@ export default function App() {
   });
 
   const isFirebaseConfigured = useMemo(() => {
-    return !!import.meta.env.VITE_FIREBASE_API_KEY && 
-           import.meta.env.VITE_FIREBASE_API_KEY !== 'YOUR_FIREBASE_API_KEY';
+    const requiredKeys = [
+      'VITE_FIREBASE_API_KEY',
+      'VITE_FIREBASE_AUTH_DOMAIN',
+      'VITE_FIREBASE_DATABASE_URL',
+      'VITE_FIREBASE_PROJECT_ID',
+      'VITE_FIREBASE_STORAGE_BUCKET',
+      'VITE_FIREBASE_MESSAGING_SENDER_ID',
+      'VITE_FIREBASE_APP_ID'
+    ];
+    
+    const missingKeys = requiredKeys.filter(key => {
+      const val = import.meta.env[key];
+      if (val) {
+        console.log(`Key ${key} is present: ${val.substring(0, 5)}...`);
+      }
+      return !val || val.includes('YOUR_FIREBASE');
+    });
+
+    if (missingKeys.length > 0) {
+      console.warn("Firebase is missing keys:", missingKeys);
+      return false;
+    }
+    return true;
   }, []);
+
+  useEffect(() => {
+    console.log("Firebase configured:", isFirebaseConfigured);
+  }, [isFirebaseConfigured]);
+
+  useEffect(() => {
+    if (userRole === 'owner' && isFirebaseConfigured) {
+      // Listen for new orders added to the database
+      const ordersRef = ref(database, 'orders');
+      const recentOrdersQuery = query(ordersRef, limitToLast(1));
+      
+      let initialLoad = true;
+      
+      const unsubscribe = onChildAdded(recentOrdersQuery, (snapshot) => {
+        if (initialLoad) {
+          initialLoad = false;
+          return;
+        }
+        
+        const orderData = snapshot.val();
+        // Only alert if it's a new order (status 'diterima')
+        if (orderData.status === 'diterima') {
+          setNewOrderAlert({
+            customerName: orderData.customerName,
+            total: orderData.total
+          });
+          
+          // Play a sound
+          try {
+            const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
+            audio.loop = true;
+            audio.play();
+            (window as any)._orderAudio = audio;
+          } catch (e) {
+            console.log("Audio play failed", e);
+          }
+        }
+      });
+
+      return () => {
+        unsubscribe();
+      };
+    }
+  }, [userRole, isFirebaseConfigured]);
 
   useEffect(() => {
     if (isFirebaseConfigured) {
@@ -298,9 +393,16 @@ export default function App() {
   }, [inventory, isFirebaseConfigured]);
   
   // Calculate stats from orders
-  const { totalRevenue, totalOrders } = useMemo(() => {
-    const total = orders.reduce((sum, order) => sum + order.total, 0);
-    return { totalRevenue: total, totalOrders: orders.length };
+  const { totalRevenue, totalOrders, revenueToday } = useMemo(() => {
+    const validOrders = orders.filter(o => o.status !== 'dibatalkan');
+    const total = validOrders.reduce((sum, order) => sum + order.total, 0);
+    
+    const today = new Date().toDateString();
+    const todayRevenue = validOrders
+      .filter(o => o.timestamp.toDateString() === today)
+      .reduce((sum, order) => sum + order.total, 0);
+
+    return { totalRevenue: total, totalOrders: validOrders.length, revenueToday: todayRevenue };
   }, [orders]);
 
   const handleSelectItem = (item: any) => {
@@ -339,9 +441,7 @@ export default function App() {
         const orderForFirebase = { ...order, timestamp: order.timestamp.toISOString() };
         push(ordersRef, orderForFirebase);
       });
-      // Also update orders state locally for immediate UI update if needed, 
-      // though the onValue listener should handle it.
-      setOrders(prev => [...newOrders, ...prev]);
+      // The onValue listener will handle updating the orders state
     } else {
       const updatedOrders = [...newOrders, ...orders];
       setOrders(updatedOrders);
@@ -387,6 +487,37 @@ export default function App() {
     }
     setCart([]);
     setView('orders');
+
+    // 4. Send to Owner's WhatsApp automatically
+    const receiptText = generateReceiptText(newOrders[0]); // Using the first item for the text if multiple, or we could join them
+    // If multiple items were in cart, they are split into multiple orders in this implementation
+    // Let's create a combined receipt if there are multiple orders from the same placement
+    let combinedText = `*PESANAN BARU - INDOMI NITE*\n`;
+    combinedText += `--------------------------------\n`;
+    combinedText += `Nama Pelanggan: ${finalName}\n`;
+    combinedText += `Jam Pemesanan: ${new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}\n`;
+    combinedText += `Alamat: ${orderAddress}\n`;
+    combinedText += `--------------------------------\n`;
+    combinedText += `*Menu Pesanan:*\n`;
+    
+    let totalAll = 0;
+    cart.forEach(cartItem => {
+      combinedText += `- ${cartItem.item.name} x${cartItem.quantity}\n`;
+      if (cartItem.toppings.length > 0) {
+        combinedText += `  Add on: ${cartItem.toppings.join(', ')}\n`;
+      }
+      if (cartItem.notes) {
+        combinedText += `  Catatan: ${cartItem.notes}\n`;
+      }
+      totalAll += cartItem.totalPrice;
+    });
+    
+    combinedText += `--------------------------------\n`;
+    combinedText += `Total Pembayaran: Rp ${totalAll.toLocaleString()}\n`;
+    combinedText += `Metode Pembayaran: ${paymentMethod}\n`;
+    combinedText += `--------------------------------\n`;
+
+    // Real-time order notification is now handled via Firebase onChildAdded listener
   };
 
   const handleCancelOrder = (orderId: string) => {
@@ -430,6 +561,7 @@ export default function App() {
           <OwnerScreen 
             inventory={inventory}
             totalRevenue={totalRevenue}
+            revenueToday={revenueToday}
             totalOrders={totalOrders}
             orders={orders}
             setOrders={setOrders}
@@ -485,8 +617,69 @@ export default function App() {
               
               setTimeout(() => setNotification(null), 5000);
             }}
+            onDeleteOrder={(orderId) => {
+              if (window.confirm('Hapus pesanan ini?')) {
+                if (isFirebaseConfigured) {
+                  const orderRef = ref(database, `orders/${orderId}`);
+                  set(orderRef, null);
+                } else {
+                  const updatedOrders = orders.filter(o => o.id !== orderId);
+                  setOrders(updatedOrders);
+                  localStorage.setItem('app_orders', JSON.stringify(updatedOrders));
+                }
+                setNotification("Pesanan telah dihapus.");
+                setTimeout(() => setNotification(null), 3000);
+              }
+            }}
+            onEditOrder={(orderId, updatedData) => {
+              if (isFirebaseConfigured) {
+                const orderRef = ref(database, `orders/${orderId}`);
+                update(orderRef, updatedData);
+              } else {
+                const updatedOrders = orders.map(o => o.id === orderId ? { ...o, ...updatedData } : o);
+                setOrders(updatedOrders);
+                localStorage.setItem('app_orders', JSON.stringify(updatedOrders));
+              }
+            }}
           />
         )}
+        
+        {/* New Order Alert Modal for Owner */}
+        <AnimatePresence>
+          {newOrderAlert && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 z-[200] bg-black/80 backdrop-blur-md flex items-center justify-center p-6"
+            >
+              <motion.div 
+                initial={{ scale: 0.9, y: 20 }}
+                animate={{ scale: 1, y: 0 }}
+                className="bg-white w-full max-w-[340px] rounded-[2.5rem] overflow-hidden shadow-2xl flex flex-col items-center p-8 text-center"
+              >
+                <div className="h-24 w-24 bg-orange-100 rounded-full flex items-center justify-center text-orange-600 mb-6 animate-bounce">
+                  <BellRing size={48} />
+                </div>
+                <h2 className="text-2xl font-bold text-[#3D2B1F] mb-2">Pesanan Baru!</h2>
+                <p className="text-[#3D2B1F]/60 mb-6">
+                  Ada pesanan masuk dari <span className="font-bold text-[#3D2B1F]">{newOrderAlert.customerName}</span> senilai <span className="font-bold text-[#D4AF37]">Rp {newOrderAlert.total.toLocaleString()}</span>
+                </p>
+                <button 
+                  onClick={() => {
+                    setNewOrderAlert(null);
+                    if ((window as any)._orderAudio) {
+                      (window as any)._orderAudio.pause();
+                    }
+                  }}
+                  className="w-full bg-[#3D2B1F] text-white py-4 rounded-2xl font-bold text-lg shadow-xl active:scale-95 transition-all"
+                >
+                  Terima Pesanan
+                </button>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
         {view === 'home' && (
             <HomeScreen 
             address={address} 
@@ -655,12 +848,40 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
   );
 }
 
-function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateStock, onUpdateItem, onLogout, onSwitchToCustomer, onUpdateOrderStatus, setOrders, isFirebaseConfigured }: { inventory: any[], totalRevenue: number, totalOrders: number, orders: Order[], onUpdateStock: (id: number, stock: number) => void, onUpdateItem: (item: any) => void, onLogout: () => void, onSwitchToCustomer: () => void, onUpdateOrderStatus: (orderId: string, status: 'diterima' | 'dimasak' | 'diantar' | 'selesai') => void, setOrders: React.Dispatch<React.SetStateAction<Order[]>>, isFirebaseConfigured: boolean }) {
+function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, orders, onUpdateStock, onUpdateItem, onLogout, onSwitchToCustomer, onUpdateOrderStatus, onDeleteOrder, onEditOrder, setOrders, isFirebaseConfigured }: { inventory: any[], totalRevenue: number, revenueToday: number, totalOrders: number, orders: Order[], onUpdateStock: (id: number, stock: number) => void, onUpdateItem: (item: any) => void, onLogout: () => void, onSwitchToCustomer: () => void, onUpdateOrderStatus: (orderId: string, status: 'diterima' | 'dimasak' | 'diantar' | 'selesai') => void, onDeleteOrder: (orderId: string) => void, onEditOrder: (orderId: string, data: any) => void, setOrders: React.Dispatch<React.SetStateAction<Order[]>>, isFirebaseConfigured: boolean }) {
   const [activeTab, setActiveTab] = useState<'beranda' | 'laporan' | 'stok' | 'pengaturan'>('beranda');
   const [viewDetail, setViewDetail] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<any | null>(null);
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const handleShareWhatsApp = (order: Order) => {
+    const text = encodeURIComponent(generateReceiptText(order));
+    const url = `https://wa.me/?text=${text}`;
+    window.open(url, '_blank');
+  };
+
+  const handleSyncLocalOrders = () => {
+    try {
+      const saved = localStorage.getItem('app_orders');
+      if (saved && isFirebaseConfigured) {
+        setIsSyncing(true);
+        const parsed = JSON.parse(saved);
+        const ordersRef = ref(database, 'orders');
+        parsed.forEach((order: any) => {
+          push(ordersRef, { ...order, timestamp: new Date(order.timestamp).toISOString() });
+        });
+        localStorage.removeItem('app_orders');
+        alert("Berhasil memindahkan pesanan lokal ke Firebase!");
+      }
+    } catch (e) {
+      console.error("Sync error:", e);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   // Icon mapping
   const IconMap: any = {
@@ -671,7 +892,7 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
   const dailyData = useMemo(() => {
     const now = new Date();
     const today = now.toDateString();
-    const todayOrders = orders.filter(o => o.timestamp.toDateString() === today);
+    const todayOrders = orders.filter(o => o.status !== 'dibatalkan' && o.timestamp.toDateString() === today);
     
     // Group by hour
     const hourlySales: { [key: number]: number } = {};
@@ -688,43 +909,6 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
       isCurrent: h === now.getHours()
     }));
   }, [orders]);
-
-  const generateReceiptText = (order: Order) => {
-    const date = order.timestamp.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
-    const time = order.timestamp.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-    
-    let text = `*NOTA PEMBELIAN INDOMI NITE*\n`;
-    text += `--------------------------------\n`;
-    text += `ID Pesanan: #${order.id}\n`;
-    text += `Tanggal: ${date} ${time}\n`;
-    text += `Pelanggan: ${order.customerName}\n`;
-    text += `--------------------------------\n`;
-    text += `*Item:*\n`;
-    order.items.forEach(cart => {
-      text += `- ${cart.item.name} x${cart.quantity}\n`;
-      if (cart.toppings.length > 0) {
-        text += `  Topping: ${cart.toppings.join(', ')}\n`;
-      }
-      if (cart.notes) {
-        text += `  Catatan: ${cart.notes}\n`;
-      }
-    });
-    text += `--------------------------------\n`;
-    text += `*TOTAL: Rp ${order.total.toLocaleString()}*\n`;
-    text += `--------------------------------\n`;
-    text += `Terima kasih sudah memesan di Indomi Nite!`;
-    return text;
-  };
-
-  const handleShareWhatsApp = (order: Order) => {
-    if (!order.customerPhone) {
-      alert('Nomor WhatsApp pelanggan tidak tersedia.');
-      return;
-    }
-    const text = encodeURIComponent(generateReceiptText(order));
-    const url = `https://wa.me/${order.customerPhone.replace(/\D/g, '')}?text=${text}`;
-    window.open(url, '_blank');
-  };
 
   const handleShareEmail = (order: Order) => {
     if (!order.customerEmail) {
@@ -764,7 +948,8 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
 
   // Calculate total profit based on HPP
   const totalProfit = useMemo(() => {
-    return orders.reduce((totalProfit, order) => {
+    const validOrders = orders.filter(o => o.status !== 'dibatalkan');
+    return validOrders.reduce((totalProfit, order) => {
       let orderHpp = 0;
       order.items.forEach(cartItem => {
         // Base HPP
@@ -807,6 +992,7 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
       const year = startYear;
       
       const monthSales = orders.filter(o => 
+        o.status !== 'dibatalkan' &&
         o.timestamp.getMonth() === monthIdx && 
         o.timestamp.getFullYear() === year
       ).length;
@@ -935,7 +1121,14 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
     <div className="flex flex-col h-full bg-[#F5F2EA] relative">
       {!isFirebaseConfigured && (
         <div className="bg-red-500 text-white px-6 py-2 text-[10px] font-bold text-center uppercase tracking-widest z-50">
-          Firebase Belum Dikonfigurasi - Data Tidak Akan Tersimpan/Muncul
+          <p>Firebase Belum Terhubung</p>
+          <p className="opacity-70 mt-0.5">Pastikan semua Secrets (API Key, URL, dll) sudah diisi dengan benar di menu Settings.</p>
+        </div>
+      )}
+      {isFirebaseConfigured && orders.length === 0 && (
+        <div className="bg-amber-500 text-white px-6 py-2 text-[10px] font-bold text-center uppercase tracking-widest z-50">
+          <p>Terhubung ke Firebase (Database Kosong)</p>
+          <p className="opacity-70 mt-0.5">Pesanan lama di browser ini tidak otomatis pindah ke Firebase. Coba buat pesanan baru!</p>
         </div>
       )}
       {/* Header */}
@@ -950,7 +1143,13 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
             <div className="w-5 h-0.5 bg-[#3D2B1F]"></div>
           </div>
         </button>
-        <h1 className="text-lg font-bold text-[#3D2B1F]">Indomi Nite</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-lg font-bold text-[#3D2B1F]">Indomi Nite</h1>
+          <div className="flex items-center gap-1 bg-red-500/10 px-2 py-0.5 rounded-full border border-red-500/20">
+            <div className="h-1.5 w-1.5 bg-red-500 rounded-full animate-pulse"></div>
+            <span className="text-[8px] font-bold text-red-500 uppercase tracking-widest">Live</span>
+          </div>
+        </div>
         <button 
           onClick={() => setActiveTab('pengaturan')}
           className="h-9 w-9 rounded-full bg-[#D4AF37]/10 flex items-center justify-center text-[#D4AF37] border border-[#D4AF37]/20 hover:bg-[#D4AF37]/20 transition-colors"
@@ -959,7 +1158,87 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
         </button>
       </div>
 
-      {/* Side Menu Drawer */}
+      <AnimatePresence>
+        {editingOrder && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setEditingOrder(null)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl relative z-10 overflow-hidden"
+            >
+              <div className="p-8">
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="text-xl font-bold text-[#3D2B1F]">Edit Pesanan</h3>
+                  <button onClick={() => setEditingOrder(null)} className="h-10 w-10 rounded-full bg-stone-100 flex items-center justify-center text-[#3D2B1F]">
+                    <X size={20} />
+                  </button>
+                </div>
+                
+                <div className="space-y-6">
+                  <div>
+                    <label className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest block mb-2">Nama Pelanggan</label>
+                    <input 
+                      type="text" 
+                      defaultValue={editingOrder.customerName}
+                      onChange={(e) => setEditingOrder({...editingOrder, customerName: e.target.value})}
+                      className="w-full bg-stone-50 border border-stone-200 rounded-2xl px-5 py-4 text-sm font-bold text-[#3D2B1F] focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/20 focus:border-[#D4AF37]"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest block mb-2">Status Pesanan</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {['diterima', 'dimasak', 'diantar', 'selesai', 'dibatalkan'].map((status) => (
+                        <button
+                          key={status}
+                          onClick={() => setEditingOrder({...editingOrder, status: status as any})}
+                          className={`py-3 rounded-xl text-[10px] font-bold uppercase tracking-wider border transition-all ${
+                            editingOrder.status === status 
+                              ? 'bg-[#3D2B1F] text-white border-[#3D2B1F]' 
+                              : 'bg-white text-[#3D2B1F] border-stone-200 hover:border-[#3D2B1F]/20'
+                          }`}
+                        >
+                          {status}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="pt-4 flex gap-3">
+                    <button 
+                      onClick={() => setEditingOrder(null)}
+                      className="flex-1 py-4 rounded-2xl text-sm font-bold text-[#3D2B1F] bg-stone-100 hover:bg-stone-200 transition-all"
+                    >
+                      Batal
+                    </button>
+                    <button 
+                      onClick={() => {
+                        onEditOrder(editingOrder.id, { 
+                          customerName: editingOrder.customerName,
+                          status: editingOrder.status
+                        });
+                        setEditingOrder(null);
+                      }}
+                      className="flex-1 py-4 rounded-2xl text-sm font-bold text-white bg-[#3D2B1F] shadow-lg hover:bg-black transition-all active:scale-95"
+                    >
+                      Simpan
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence>
         {isMenuOpen && (
           <>
@@ -1043,7 +1322,7 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
                 <div>
                   <p className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest mb-1">Total Pesanan Hari Ini</p>
                   <p className="text-3xl font-bold text-[#3D2B1F]">
-                    {orders.filter(o => o.timestamp.toDateString() === new Date().toDateString()).length}
+                    {orders.filter(o => o.status !== 'dibatalkan' && o.timestamp.toDateString() === new Date().toDateString()).length}
                   </p>
                 </div>
                 <div className="h-14 w-14 rounded-2xl bg-[#3D2B1F]/5 flex items-center justify-center text-[#3D2B1F]">
@@ -1051,6 +1330,23 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
                 </div>
               </div>
             </div>
+
+            {/* Sync Button if Firebase is connected but empty and local orders exist */}
+            {isFirebaseConfigured && orders.length === 0 && localStorage.getItem('app_orders') && (
+              <div className="mb-8 p-6 bg-amber-50 rounded-[2rem] border border-amber-200">
+                <p className="text-xs font-bold text-amber-800 mb-2">Pindahkan Pesanan Lokal?</p>
+                <p className="text-[10px] text-amber-700/70 mb-4 leading-relaxed">
+                  Kami mendeteksi ada pesanan lama di browser ini. Klik tombol di bawah untuk memindahkannya ke Firebase agar bisa dilihat di semua perangkat.
+                </p>
+                <button 
+                  onClick={handleSyncLocalOrders}
+                  disabled={isSyncing}
+                  className="w-full bg-amber-500 text-white py-3 rounded-xl text-[10px] font-bold uppercase tracking-widest shadow-md active:scale-95 transition-all disabled:opacity-50"
+                >
+                  {isSyncing ? 'Memindahkan...' : 'Pindahkan ke Firebase'}
+                </button>
+              </div>
+            )}
 
             {/* Active Orders Section */}
             {orders.filter(o => o.status !== 'selesai').length > 0 && (
@@ -1063,16 +1359,11 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
                 </div>
                 <div className="space-y-3">
                   {orders.filter(o => o.status !== 'selesai').map(order => (
-                    <div key={order.id} className="bg-white p-5 rounded-[2rem] border border-[#3D2B1F]/5 shadow-sm flex flex-col gap-4">
-                      <div className="flex items-center justify-between">
+                    <div key={order.id} className="bg-white p-6 rounded-[2rem] border border-[#3D2B1F]/5 shadow-sm flex flex-col gap-4">
+                      <div className="flex items-center justify-between border-b border-[#3D2B1F]/5 pb-3">
                         <div>
-                          <p className="font-bold text-[#3D2B1F] text-base">{order.customerName}</p>
-                          <p className="text-xs text-[#3D2B1F]/60 mt-0.5">
-                            {order.items.map(i => `${i.item.name} x${i.quantity}`).join(', ')}
-                          </p>
-                          <p className="text-[10px] text-[#3D2B1F]/40 mt-1 font-medium">
-                            Dipesan pukul {order.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                          </p>
+                          <p className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest">Nama Pelanggan</p>
+                          <p className="font-bold text-[#3D2B1F] text-lg">{order.customerName}</p>
                         </div>
                         <div className="flex flex-col items-end gap-2">
                           <span className={`text-[10px] font-bold px-2.5 py-1 rounded-lg uppercase tracking-wider ${
@@ -1082,23 +1373,72 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
                           }`}>
                             {order.status}
                           </span>
-                          <p className="text-xs font-bold text-[#3D2B1F]">Rp {order.total.toLocaleString()}</p>
+                          <div className="flex gap-1">
+                            <button 
+                              onClick={() => setEditingOrder(order)}
+                              className="h-8 w-8 rounded-lg bg-stone-100 text-stone-600 flex items-center justify-center hover:bg-stone-200 transition-colors"
+                              title="Edit Pesanan"
+                            >
+                              <Pencil size={14} />
+                            </button>
+                            <button 
+                              onClick={() => onDeleteOrder(order.id)}
+                              className="h-8 w-8 rounded-lg bg-red-50 text-red-600 flex items-center justify-center hover:bg-red-100 transition-colors"
+                              title="Hapus Pesanan"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3">
+                        <div>
+                          <p className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest mb-1">Menu Pesanan</p>
+                          {order.items.map((item, idx) => (
+                            <div key={idx} className="mb-2 last:mb-0">
+                              <p className="text-sm font-bold text-[#3D2B1F]">{item.item.name} x{item.quantity}</p>
+                              {item.toppings.length > 0 && (
+                                <p className="text-[11px] text-[#3D2B1F]/60">Add on: {item.toppings.join(', ')}</p>
+                              )}
+                              {item.notes && (
+                                <p className="text-[11px] text-[#3D2B1F]/60 italic">Catatan: {item.notes}</p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="space-y-3 pt-2">
+                          <div>
+                            <p className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest mb-0.5">Total Pembayaran</p>
+                            <p className="text-sm font-bold text-[#3D2B1F]">Rp {order.total.toLocaleString()}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest mb-0.5">Metode Pembayaran</p>
+                            <p className="text-sm font-bold text-[#3D2B1F]">{order.paymentMethod || 'TUNAI'}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest mb-0.5">Jam Pemesanan</p>
+                            <p className="text-sm font-bold text-[#3D2B1F]">
+                              {order.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                            </p>
+                          </div>
                         </div>
                       </div>
                       
-                      <div className="flex gap-2 pt-2 border-t border-[#3D2B1F]/5">
+                      <div className="flex gap-2 pt-4 border-t border-[#3D2B1F]/5">
                         <button 
                           onClick={() => onUpdateOrderStatus(order.id, 'selesai')}
-                          className="flex-1 bg-[#3D2B1F] text-white text-xs font-bold py-3 rounded-xl shadow-lg hover:bg-black transition-all active:scale-95"
+                          className="flex-1 bg-[#3D2B1F] text-white text-xs font-bold py-3.5 rounded-xl shadow-lg hover:bg-black transition-all active:scale-95"
                         >
                           Selesaikan Pesanan
                         </button>
                         <button 
                           onClick={() => handleShareWhatsApp(order)}
-                          className="h-11 w-11 bg-green-50 text-green-600 rounded-xl flex items-center justify-center hover:bg-green-100 transition-colors"
-                          title="Kirim Nota WA"
+                          className="h-12 w-12 bg-green-50 text-green-600 rounded-xl flex items-center justify-center hover:bg-green-100 transition-colors border border-green-100"
+                          title="Kirim ke WhatsApp"
                         >
-                          <Phone size={18} />
+                          <Phone size={20} />
                         </button>
                       </div>
                     </div>
@@ -1108,11 +1448,17 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
             )}
 
             {/* Pesanan Selesai Hari Ini */}
-            <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-[#3D2B1F]/5">
-              <h3 className="font-bold text-[#3D2B1F] mb-4">Pesanan Selesai Hari Ini</h3>
+            <div className="mb-8">
+              <div className="flex items-center justify-between mb-4 px-2">
+                <h3 className="font-bold text-[#3D2B1F]">Pesanan Selesai Hari Ini</h3>
+                <span className="bg-green-100 text-green-600 text-[10px] font-bold px-3 py-1 rounded-full">
+                  {orders.filter(o => o.status === 'selesai' && o.timestamp.toDateString() === new Date().toDateString()).length} Selesai
+                </span>
+              </div>
+              
               <div className="space-y-4">
                 {orders.filter(o => o.status === 'selesai' && o.timestamp.toDateString() === new Date().toDateString()).length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-10 text-center">
+                  <div className="bg-white p-10 rounded-[2.5rem] shadow-sm border border-[#3D2B1F]/5 flex flex-col items-center justify-center text-center">
                     <div className="h-16 w-16 rounded-full bg-[#3D2B1F]/5 flex items-center justify-center text-[#3D2B1F]/20 mb-3">
                       <CheckCircle size={32} />
                     </div>
@@ -1120,18 +1466,64 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
                   </div>
                 ) : (
                   orders.filter(o => o.status === 'selesai' && o.timestamp.toDateString() === new Date().toDateString()).map((order) => (
-                    <div key={order.id} className="flex items-center justify-between border-b border-[#3D2B1F]/5 pb-4 last:border-0 last:pb-0">
-                      <div>
-                        <p className="font-bold text-[#3D2B1F] text-sm">{order.customerName}</p>
-                        <p className="text-[10px] text-[#3D2B1F]/50">
-                          {order.items[0].item.name} {order.items.length > 1 ? `+${order.items.length - 1} lainnya` : ''} • {order.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                        </p>
+                    <div key={order.id} className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-[#3D2B1F]/5 flex flex-col gap-4">
+                      <div className="flex items-center justify-between border-b border-[#3D2B1F]/5 pb-3">
+                        <div>
+                          <p className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest">Nama Pelanggan</p>
+                          <p className="font-bold text-[#3D2B1F] text-lg">{order.customerName}</p>
+                        </div>
+                        <div className="text-right flex flex-col items-end gap-2">
+                          <div className="flex items-center justify-end gap-1.5 text-green-600 bg-green-50 px-3 py-1 rounded-lg">
+                            <CheckCircle size={12} fill="currentColor" className="text-green-500" />
+                            <span className="text-[10px] font-bold uppercase tracking-wider">Selesai</span>
+                          </div>
+                          <div className="flex gap-1">
+                            <button 
+                              onClick={() => setEditingOrder(order)}
+                              className="h-8 w-8 rounded-lg bg-stone-100 text-stone-600 flex items-center justify-center hover:bg-stone-200 transition-colors"
+                              title="Edit Pesanan"
+                            >
+                              <Pencil size={14} />
+                            </button>
+                            <button 
+                              onClick={() => onDeleteOrder(order.id)}
+                              className="h-8 w-8 rounded-lg bg-red-50 text-red-600 flex items-center justify-center hover:bg-red-100 transition-colors"
+                              title="Hapus Pesanan"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                      <div className="text-right">
-                        <p className="font-bold text-[#3D2B1F] text-sm">Rp {order.total.toLocaleString()}</p>
-                        <div className="flex items-center justify-end gap-1 text-green-600">
-                          <CheckCircle size={10} />
-                          <span className="text-[10px] font-bold uppercase">Selesai</span>
+                      
+                      <div className="space-y-4">
+                        <div>
+                          <p className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest mb-2">Menu Pesanan</p>
+                          {order.items.map((item, idx) => (
+                            <div key={idx} className="mb-2 last:mb-0">
+                              <p className="text-sm font-bold text-[#3D2B1F]">{item.item.name} x{item.quantity}</p>
+                              {item.toppings.length > 0 && (
+                                <p className="text-[11px] text-[#3D2B1F]/60">Add on: {item.toppings.join(', ')}</p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="space-y-3 pt-2 border-t border-[#3D2B1F]/5">
+                          <div>
+                            <p className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest mb-0.5">Total Pembayaran</p>
+                            <p className="text-sm font-bold text-[#3D2B1F]">Rp {order.total.toLocaleString()}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest mb-0.5">Metode Pembayaran</p>
+                            <p className="text-sm font-bold text-[#3D2B1F]">{order.paymentMethod || 'TUNAI'}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest mb-0.5">Waktu Pemesanan</p>
+                            <p className="text-sm font-bold text-[#3D2B1F]">
+                              {order.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                            </p>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1156,20 +1548,25 @@ function OwnerScreen({ inventory, totalRevenue, totalOrders, orders, onUpdateSto
               </div>
               <button 
                 onClick={handleDownloadReport}
-                className="flex items-center gap-2 bg-[#3D2B1F] text-white px-4 py-2 rounded-xl text-xs font-bold shadow-md hover:bg-black transition-all active:scale-95"
+                className="h-10 w-10 flex items-center justify-center bg-[#D4AF37] text-white rounded-xl shadow-md hover:bg-[#B8962F] transition-all active:scale-95"
+                title="Download Rekap Laporan (.csv)"
               >
-                <ReceiptText size={14} /> Download CSV
+                <Download size={20} />
               </button>
             </div>
             
             {/* Report Summary Cards */}
             <div className="grid grid-cols-2 gap-4">
               <div className="bg-white p-5 rounded-3xl shadow-sm border border-[#3D2B1F]/5">
-                <p className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest mb-1">Total Omzet</p>
-                <p className="text-xl font-bold text-[#3D2B1F]">Rp {totalRevenue.toLocaleString()}</p>
+                <p className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest mb-1">Omzet Hari Ini</p>
+                <p className="text-xl font-bold text-[#D4AF37]">Rp {revenueToday.toLocaleString()}</p>
               </div>
               <div className="bg-white p-5 rounded-3xl shadow-sm border border-[#3D2B1F]/5">
-                <p className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest mb-1">Estimasi Profit</p>
+                <p className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest mb-1">Total Omzet (Semua)</p>
+                <p className="text-xl font-bold text-[#3D2B1F]">Rp {totalRevenue.toLocaleString()}</p>
+              </div>
+              <div className="bg-white p-5 rounded-3xl shadow-sm border border-[#3D2B1F]/5 col-span-2">
+                <p className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest mb-1">Estimasi Profit (Semua)</p>
                 <p className="text-xl font-bold text-green-600">Rp {totalProfit.toLocaleString()}</p>
               </div>
             </div>
@@ -2731,7 +3128,6 @@ function OrdersScreen({ onBack, onGoHome, orders, cart, customerName }: { onBack
                                 <span className="text-[10px] font-bold text-red-500 uppercase mt-0.5">Pesanan Dibatalkan</span>
                               )}
                             </div>
-                            <span className="text-[10px] font-bold text-[#3D2B1F]/40">#{order.id.slice(-4)}</span>
                           </div>
                           <div className="space-y-4">
                             {order.items.map((item, idx) => (

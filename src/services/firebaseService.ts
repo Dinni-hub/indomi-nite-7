@@ -14,5 +14,6 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
+console.log("Firebase initialized with project:", firebaseConfig.projectId);
 export const database = getDatabase(app);
 export const analytics = getAnalytics(app);
