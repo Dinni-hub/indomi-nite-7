@@ -9,7 +9,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend 
 } from 'recharts';
 import { database } from "./services/firebaseService";
-import { ref, onValue, push, set, update, limitToLast, query, onChildAdded } from "firebase/database";
+import { ref, onValue, push, set, update, limitToLast, query, onChildAdded, remove } from "firebase/database";
 import { 
   Bell, ChevronDown, Search, 
   SlidersHorizontal, Flame, Utensils, Soup, IceCream, 
@@ -237,28 +237,6 @@ export default function App() {
   });
 
   const isFirebaseConfigured = useMemo(() => {
-    const requiredKeys = [
-      'VITE_FIREBASE_API_KEY',
-      'VITE_FIREBASE_AUTH_DOMAIN',
-      'VITE_FIREBASE_DATABASE_URL',
-      'VITE_FIREBASE_PROJECT_ID',
-      'VITE_FIREBASE_STORAGE_BUCKET',
-      'VITE_FIREBASE_MESSAGING_SENDER_ID',
-      'VITE_FIREBASE_APP_ID'
-    ];
-    
-    const missingKeys = requiredKeys.filter(key => {
-      const val = import.meta.env[key];
-      if (val) {
-        console.log(`Key ${key} is present: ${val.substring(0, 5)}...`);
-      }
-      return !val || val.includes('YOUR_FIREBASE');
-    });
-
-    if (missingKeys.length > 0) {
-      console.warn("Firebase is missing keys:", missingKeys);
-      return false;
-    }
     return true;
   }, []);
 
@@ -394,7 +372,7 @@ export default function App() {
   
   // Calculate stats from orders
   const { totalRevenue, totalOrders, revenueToday } = useMemo(() => {
-    const validOrders = orders.filter(o => o.status !== 'dibatalkan');
+    const validOrders = orders.filter(o => o.status === 'selesai');
     const total = validOrders.reduce((sum, order) => sum + order.total, 0);
     
     const today = new Date().toDateString();
@@ -555,7 +533,14 @@ export default function App() {
           )}
         </AnimatePresence>
         {view === 'welcome' && (
-          <WelcomeScreen onStart={() => setView('home')} />
+          <WelcomeScreen onStart={() => {
+            if (userRole === 'owner') {
+              setView('owner');
+            } else {
+              setHomeActiveTab('home');
+              setView('home');
+            }
+          }} />
         )}
         {view === 'owner' && (
           <OwnerScreen 
@@ -618,18 +603,16 @@ export default function App() {
               setTimeout(() => setNotification(null), 5000);
             }}
             onDeleteOrder={(orderId) => {
-              if (window.confirm('Hapus pesanan ini?')) {
-                if (isFirebaseConfigured) {
-                  const orderRef = ref(database, `orders/${orderId}`);
-                  set(orderRef, null);
-                } else {
-                  const updatedOrders = orders.filter(o => o.id !== orderId);
-                  setOrders(updatedOrders);
-                  localStorage.setItem('app_orders', JSON.stringify(updatedOrders));
-                }
-                setNotification("Pesanan telah dihapus.");
-                setTimeout(() => setNotification(null), 3000);
+              if (isFirebaseConfigured) {
+                const orderRef = ref(database, `orders/${orderId}`);
+                remove(orderRef);
+              } else {
+                const updatedOrders = orders.filter(o => o.id !== orderId);
+                setOrders(updatedOrders);
+                localStorage.setItem('app_orders', JSON.stringify(updatedOrders));
               }
+              setNotification("Pesanan telah dihapus.");
+              setTimeout(() => setNotification(null), 3000);
             }}
             onEditOrder={(orderId, updatedData) => {
               if (isFirebaseConfigured) {
@@ -808,7 +791,7 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
             onClick={() => onStart()}
             className="flex w-full items-center justify-center rounded-2xl h-16 bg-[#3D2B1F] text-[#F5F2EA] text-xl font-bold shadow-xl transition-colors hover:bg-black active:scale-95"
           >
-            Mulai
+            Masuk
           </button>
         </div>
 
@@ -854,6 +837,8 @@ function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, order
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<any | null>(null);
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
+  const [orderToDelete, setOrderToDelete] = useState<string | null>(null);
+  const [isResettingData, setIsResettingData] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
 
@@ -892,7 +877,7 @@ function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, order
   const dailyData = useMemo(() => {
     const now = new Date();
     const today = now.toDateString();
-    const todayOrders = orders.filter(o => o.status !== 'dibatalkan' && o.timestamp.toDateString() === today);
+    const todayOrders = orders.filter(o => o.status === 'selesai' && o.timestamp.toDateString() === today);
     
     // Group by hour
     const hourlySales: { [key: number]: number } = {};
@@ -948,7 +933,7 @@ function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, order
 
   // Calculate total profit based on HPP
   const totalProfit = useMemo(() => {
-    const validOrders = orders.filter(o => o.status !== 'dibatalkan');
+    const validOrders = orders.filter(o => o.status === 'selesai');
     return validOrders.reduce((totalProfit, order) => {
       let orderHpp = 0;
       order.items.forEach(cartItem => {
@@ -992,7 +977,7 @@ function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, order
       const year = startYear;
       
       const monthSales = orders.filter(o => 
-        o.status !== 'dibatalkan' &&
+        o.status === 'selesai' &&
         o.timestamp.getMonth() === monthIdx && 
         o.timestamp.getFullYear() === year
       ).length;
@@ -1382,7 +1367,7 @@ function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, order
                               <Pencil size={14} />
                             </button>
                             <button 
-                              onClick={() => onDeleteOrder(order.id)}
+                              onClick={() => setOrderToDelete(order.id)}
                               className="h-8 w-8 rounded-lg bg-red-50 text-red-600 flex items-center justify-center hover:bg-red-100 transition-colors"
                               title="Hapus Pesanan"
                             >
@@ -1486,7 +1471,7 @@ function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, order
                               <Pencil size={14} />
                             </button>
                             <button 
-                              onClick={() => onDeleteOrder(order.id)}
+                              onClick={() => setOrderToDelete(order.id)}
                               className="h-8 w-8 rounded-lg bg-red-50 text-red-600 flex items-center justify-center hover:bg-red-100 transition-colors"
                               title="Hapus Pesanan"
                             >
@@ -1724,6 +1709,12 @@ function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, order
                 >
                   <Utensils size={20} /> Mode Pelanggan
                 </button>
+                <button 
+                  onClick={() => setIsResettingData(true)}
+                  className="w-full py-4 rounded-xl bg-red-50 text-red-600 font-bold flex items-center justify-center gap-2 hover:bg-red-100 transition-colors"
+                >
+                  <Trash2 size={20} /> Reset Semua Data
+                </button>
               </div>
 
               <button 
@@ -1768,6 +1759,101 @@ function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, order
           <span className="text-[9px] font-bold">Pengaturan</span>
         </button>
       </div>
+
+      {/* Modals */}
+      <AnimatePresence>
+        {orderToDelete && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setOrderToDelete(null)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl"
+            >
+              <div className="h-16 w-16 rounded-full bg-red-50 flex items-center justify-center text-red-500 mx-auto mb-4">
+                <Trash2 size={32} />
+              </div>
+              <h3 className="text-xl font-bold text-center text-[#3D2B1F] mb-2">Hapus Pesanan?</h3>
+              <p className="text-center text-[#3D2B1F]/60 text-sm mb-6">
+                Pesanan ini akan dihapus secara permanen dan tidak dapat dikembalikan.
+              </p>
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setOrderToDelete(null)}
+                  className="flex-1 py-3.5 rounded-xl font-bold text-[#3D2B1F] bg-stone-100 hover:bg-stone-200 transition-colors"
+                >
+                  Batal
+                </button>
+                <button 
+                  onClick={() => {
+                    onDeleteOrder(orderToDelete);
+                    setOrderToDelete(null);
+                  }}
+                  className="flex-1 py-3.5 rounded-xl font-bold text-white bg-red-500 hover:bg-red-600 transition-colors"
+                >
+                  Hapus
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {isResettingData && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsResettingData(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl"
+            >
+              <div className="h-16 w-16 rounded-full bg-red-50 flex items-center justify-center text-red-500 mx-auto mb-4">
+                <AlertTriangle size={32} />
+              </div>
+              <h3 className="text-xl font-bold text-center text-[#3D2B1F] mb-2">Reset Semua Data?</h3>
+              <p className="text-center text-[#3D2B1F]/60 text-sm mb-6">
+                Tindakan ini akan menghapus semua data pesanan dari database. Apakah Anda yakin?
+              </p>
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setIsResettingData(false)}
+                  className="flex-1 py-3.5 rounded-xl font-bold text-[#3D2B1F] bg-stone-100 hover:bg-stone-200 transition-colors"
+                >
+                  Batal
+                </button>
+                <button 
+                  onClick={() => {
+                    if (isFirebaseConfigured) {
+                      const ordersRef = ref(database, 'orders');
+                      remove(ordersRef);
+                    } else {
+                      localStorage.removeItem('app_orders');
+                      setOrders([]);
+                    }
+                    setIsResettingData(false);
+                  }}
+                  className="flex-1 py-3.5 rounded-xl font-bold text-white bg-red-500 hover:bg-red-600 transition-colors"
+                >
+                  Ya, Reset
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

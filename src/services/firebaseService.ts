@@ -3,14 +3,14 @@ import { getDatabase } from "firebase/database";
 import { getAnalytics } from "firebase/analytics";
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
+  apiKey: "AIzaSyDgpgvxBgUbeD1jGS3rPKzzfgzxclx960s",
+  authDomain: "indomi-nite.firebaseapp.com",
+  databaseURL: "https://indomi-nite-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "indomi-nite",
+  storageBucket: "indomi-nite.firebasestorage.app",
+  messagingSenderId: "74730525314",
+  appId: "1:74730525314:web:cc76b5cd6ba3c31fe9da9b",
+  measurementId: "G-CWVEQV4B4X"
 };
 
 const app = initializeApp(firebaseConfig);
