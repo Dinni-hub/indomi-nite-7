@@ -57,20 +57,31 @@ const generateReceiptText = (order: Order) => {
   text += `Jam Pemesanan: ${time}\n`;
   text += `--------------------------------\n`;
   text += `*Menu Pesanan:*\n`;
-  order.items.forEach(cart => {
-    text += `- ${cart.item.name} x${cart.quantity}\n`;
-    if (cart.toppings.length > 0) {
-      text += `  Add on: ${cart.toppings.join(', ')}\n`;
-    }
-    if (cart.notes) {
-      text += `  Catatan: ${cart.notes}\n`;
-    }
-  });
+  if (order.items && Array.isArray(order.items)) {
+    order.items.forEach(cart => {
+      if (!cart || !cart.item) return;
+      text += `- ${cart.item.name} x${cart.quantity}\n`;
+      if (cart.toppings && cart.toppings.length > 0) {
+        text += `  Add on: ${cart.toppings.join(', ')}\n`;
+      }
+      if (cart.notes) {
+        text += `  Catatan: ${cart.notes}\n`;
+      }
+    });
+  }
   text += `--------------------------------\n`;
   text += `Total Pembayaran: Rp ${order.total.toLocaleString()}\n`;
   text += `Metode Pembayaran: ${order.paymentMethod || 'TUNAI'}\n`;
   text += `--------------------------------\n`;
   return text;
+};
+
+const getLocalStorageItem = (key: string, defaultValue: string) => {
+  try {
+    return localStorage.getItem(key) || defaultValue;
+  } catch (e) {
+    return defaultValue;
+  }
 };
 
 export default function App() {
@@ -85,7 +96,7 @@ export default function App() {
     }
     return 'welcome';
   });
-  const [address, setAddress] = useState(() => localStorage.getItem('app_address') || '');
+  const [address, setAddress] = useState(() => getLocalStorageItem('app_address', ''));
   const [addresses, setAddresses] = useState<any[]>([]);
   const [selectedItem, setSelectedItem] = useState<any>(() => {
     try {
@@ -97,13 +108,16 @@ export default function App() {
     return null;
   });
   const [notification, setNotification] = useState<string | null>(null);
-  const [homeActiveTab, setHomeActiveTab] = useState(() => localStorage.getItem('app_homeTab') || 'home');
+  const [homeActiveTab, setHomeActiveTab] = useState(() => getLocalStorageItem('app_homeTab', 'home'));
   const [homeActiveCategory, setHomeActiveCategory] = useState('Mie');
   const [homeSearchQuery, setHomeSearchQuery] = useState('');
   const [cart, setCart] = useState<CartItem[]>(() => {
     try {
       const saved = localStorage.getItem('app_cart');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed.filter(Boolean);
+      }
     } catch (e) {
       console.error("Error parsing cart from localStorage", e);
     }
@@ -111,21 +125,28 @@ export default function App() {
   });
 
   const [userRole, setUserRole] = useState<'guest' | 'customer' | 'owner'>(() => {
-    const saved = localStorage.getItem('app_userRole');
-    return (saved as any) || 'guest';
+    try {
+      const saved = localStorage.getItem('app_userRole');
+      return (saved as any) || 'guest';
+    } catch (e) {
+      return 'guest';
+    }
   });
-  const [customerName, setCustomerName] = useState(() => localStorage.getItem('app_customerName') || '');
-  const [customerPhone, setCustomerPhone] = useState(() => localStorage.getItem('app_customerPhone') || '');
-  const [customerEmail, setCustomerEmail] = useState(() => localStorage.getItem('app_customerEmail') || '');
+  const [customerName, setCustomerName] = useState(() => getLocalStorageItem('app_customerName', ''));
+  const [customerPhone, setCustomerPhone] = useState(() => getLocalStorageItem('app_customerPhone', ''));
+  const [customerEmail, setCustomerEmail] = useState(() => getLocalStorageItem('app_customerEmail', ''));
   const [customerAddress, setCustomerAddress] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('TUNAI');
 
   const [newOrderAlert, setNewOrderAlert] = useState<any | null>(null);
 
-  const [inventory, setInventory] = useState(() => {
+  const [inventory, setInventory] = useState<any[]>(() => {
     try {
       const saved = localStorage.getItem('app_inventory');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed.filter(Boolean);
+      }
     } catch (e) {
       console.error("Error parsing inventory from localStorage", e);
     }
@@ -225,10 +246,17 @@ export default function App() {
       const saved = localStorage.getItem('app_orders');
       if (saved) {
         const parsed = JSON.parse(saved);
-        return parsed.map((o: any) => ({
-          ...o,
-          timestamp: new Date(o.timestamp)
-        }));
+        if (Array.isArray(parsed)) {
+          return parsed.reduce((acc: any[], o: any) => {
+            if (o) {
+              acc.push({
+                ...o,
+                timestamp: o.timestamp ? new Date(o.timestamp) : new Date()
+              });
+            }
+            return acc;
+          }, []);
+        }
       }
     } catch (e) {
       console.error("Error parsing orders from localStorage", e);
@@ -290,11 +318,16 @@ export default function App() {
       const unsubscribeOrders = onValue(ordersRef, (snapshot) => {
         const data = snapshot.val();
         if (data) {
-          const ordersArray = Object.keys(data).map(key => ({
-            ...data[key],
-            id: key,
-            timestamp: new Date(data[key].timestamp)
-          }));
+          const ordersArray = Object.keys(data).reduce((acc: any[], key) => {
+            if (data[key]) {
+              acc.push({
+                ...data[key],
+                id: key,
+                timestamp: data[key].timestamp ? new Date(data[key].timestamp) : new Date()
+              });
+            }
+            return acc;
+          }, []);
           setOrders(ordersArray.reverse());
         } else {
           setOrders([]);
@@ -307,7 +340,8 @@ export default function App() {
       const unsubscribeInventory = onValue(inventoryRef, (snapshot) => {
         const data = snapshot.val();
         if (data) {
-          setInventory(data);
+          const inventoryArray = Array.isArray(data) ? data : Object.values(data);
+          setInventory(inventoryArray.filter(Boolean));
         }
       }, (error) => {
         console.error("Firebase Inventory error:", error);
@@ -389,7 +423,7 @@ export default function App() {
   };
 
   const handlePlaceOrder = (name: string, phone: string, email: string, orderAddress: string) => {
-    if (cart.length === 0) return;
+    if (!cart || cart.length === 0) return;
 
     const finalName = name || 'Pelanggan';
     setCustomerName(finalName);
@@ -438,16 +472,18 @@ export default function App() {
       }
       
       // Deduct Toppings
-      cartItem.toppings.forEach(topping => {
-        if (topping.includes('Telur')) {
-          const idx = newInventory.findIndex(i => i.name === 'Telur');
-          if (idx > -1) newInventory[idx].stock = Math.max(0, newInventory[idx].stock - cartItem.quantity);
-        }
-        if (topping.includes('Caisim')) {
-          const idx = newInventory.findIndex(i => i.name === 'Caisim');
-          if (idx > -1) newInventory[idx].stock = Math.max(0, newInventory[idx].stock - (0.1 * cartItem.quantity)); // Assume 100g per portion
-        }
-      });
+      if (cartItem.toppings && Array.isArray(cartItem.toppings)) {
+        cartItem.toppings.forEach(topping => {
+          if (topping.includes('Telur')) {
+            const idx = newInventory.findIndex(i => i.name === 'Telur');
+            if (idx > -1) newInventory[idx].stock = Math.max(0, newInventory[idx].stock - cartItem.quantity);
+          }
+          if (topping.includes('Caisim')) {
+            const idx = newInventory.findIndex(i => i.name === 'Caisim');
+            if (idx > -1) newInventory[idx].stock = Math.max(0, newInventory[idx].stock - (0.1 * cartItem.quantity)); // Assume 100g per portion
+          }
+        });
+      }
 
       // Deduct Packaging & Utensils
       const pkgIdx = newInventory.findIndex(i => i.name === 'Packaging Box Kertas');
@@ -481,7 +517,7 @@ export default function App() {
     let totalAll = 0;
     cart.forEach(cartItem => {
       combinedText += `- ${cartItem.item.name} x${cartItem.quantity}\n`;
-      if (cartItem.toppings.length > 0) {
+      if (cartItem.toppings && cartItem.toppings.length > 0) {
         combinedText += `  Add on: ${cartItem.toppings.join(', ')}\n`;
       }
       if (cartItem.notes) {
@@ -913,7 +949,7 @@ function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, order
     csvContent += "ID Pesanan,Pelanggan,Menu,Total,Waktu,Status\n";
     
     orders.forEach(order => {
-      const items = order.items.map(i => i.item.name).join('; ');
+      const items = order.items && Array.isArray(order.items) ? order.items.filter(i => i && i.item).map(i => i.item.name).join('; ') : '';
       const time = order.timestamp.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
       csvContent += `${order.id},${order.customerName},${items},${order.total},${time},${order.status}\n`;
     });
@@ -936,30 +972,35 @@ function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, order
     const validOrders = orders.filter(o => o.status === 'selesai');
     return validOrders.reduce((totalProfit, order) => {
       let orderHpp = 0;
-      order.items.forEach(cartItem => {
-        // Base HPP
-        let itemHpp = 0;
-        if (cartItem.item.name.includes('Goreng')) {
-          itemHpp = 4018;
-        } else {
-          itemHpp = (cartItem.item.priceNum || 0) * 0.7;
-        }
-        orderHpp += itemHpp * cartItem.quantity;
-
-        // Toppings HPP
-        cartItem.toppings.forEach(toppingName => {
-          if (toppingName === 'Telur Rebus') {
-            orderHpp += 2500 * cartItem.quantity;
+      if (order.items && Array.isArray(order.items)) {
+        order.items.forEach(cartItem => {
+          if (!cartItem || !cartItem.item) return;
+          // Base HPP
+          let itemHpp = 0;
+          if (cartItem.item.name.includes('Goreng')) {
+            itemHpp = 4018;
           } else {
-            // Default 30% margin for other toppings
-            // We need to find the topping price. 
-            // Since we don't have a global topping list easily accessible here, 
-            // we'll use a heuristic or just assume 70% HPP.
-            const toppingPrice = toppingName === 'Sosis' ? 1000 : 1000; // Simplified
-            orderHpp += toppingPrice * 0.7 * cartItem.quantity;
+            itemHpp = (cartItem.item.priceNum || 0) * 0.7;
+          }
+          orderHpp += itemHpp * cartItem.quantity;
+
+          // Toppings HPP
+          if (cartItem.toppings && Array.isArray(cartItem.toppings)) {
+            cartItem.toppings.forEach(toppingName => {
+              if (toppingName === 'Telur Rebus') {
+                orderHpp += 2500 * cartItem.quantity;
+              } else {
+                // Default 30% margin for other toppings
+                // We need to find the topping price. 
+                // Since we don't have a global topping list easily accessible here, 
+                // we'll use a heuristic or just assume 70% HPP.
+                const toppingPrice = toppingName === 'Sosis' ? 1000 : 1000; // Simplified
+                orderHpp += toppingPrice * 0.7 * cartItem.quantity;
+              }
+            });
           }
         });
-      });
+      }
       return totalProfit + (order.total - orderHpp);
     }, 0);
   }, [orders]);
@@ -1110,7 +1151,7 @@ function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, order
           <p className="opacity-70 mt-0.5">Pastikan semua Secrets (API Key, URL, dll) sudah diisi dengan benar di menu Settings.</p>
         </div>
       )}
-      {isFirebaseConfigured && orders.length === 0 && (
+      {isFirebaseConfigured && (!orders || orders.length === 0) && (
         <div className="bg-amber-500 text-white px-6 py-2 text-[10px] font-bold text-center uppercase tracking-widest z-50">
           <p>Terhubung ke Firebase (Database Kosong)</p>
           <p className="opacity-70 mt-0.5">Pesanan lama di browser ini tidak otomatis pindah ke Firebase. Coba buat pesanan baru!</p>
@@ -1317,7 +1358,7 @@ function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, order
             </div>
 
             {/* Sync Button if Firebase is connected but empty and local orders exist */}
-            {isFirebaseConfigured && orders.length === 0 && localStorage.getItem('app_orders') && (
+            {isFirebaseConfigured && (!orders || orders.length === 0) && localStorage.getItem('app_orders') && (
               <div className="mb-8 p-6 bg-amber-50 rounded-[2rem] border border-amber-200">
                 <p className="text-xs font-bold text-amber-800 mb-2">Pindahkan Pesanan Lokal?</p>
                 <p className="text-[10px] text-amber-700/70 mb-4 leading-relaxed">
@@ -1380,10 +1421,10 @@ function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, order
                       <div className="space-y-3">
                         <div>
                           <p className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest mb-1">Menu Pesanan</p>
-                          {order.items.map((item, idx) => (
+                          {order.items && Array.isArray(order.items) && order.items.filter(i => i && i.item).map((item, idx) => (
                             <div key={idx} className="mb-2 last:mb-0">
                               <p className="text-sm font-bold text-[#3D2B1F]">{item.item.name} x{item.quantity}</p>
-                              {item.toppings.length > 0 && (
+                              {item.toppings && item.toppings.length > 0 && (
                                 <p className="text-[11px] text-[#3D2B1F]/60">Add on: {item.toppings.join(', ')}</p>
                               )}
                               {item.notes && (
@@ -1484,10 +1525,10 @@ function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, order
                       <div className="space-y-4">
                         <div>
                           <p className="text-[10px] font-bold text-[#3D2B1F]/40 uppercase tracking-widest mb-2">Menu Pesanan</p>
-                          {order.items.map((item, idx) => (
+                          {order.items && Array.isArray(order.items) && order.items.filter(i => i && i.item).map((item, idx) => (
                             <div key={idx} className="mb-2 last:mb-0">
                               <p className="text-sm font-bold text-[#3D2B1F]">{item.item.name} x{item.quantity}</p>
-                              {item.toppings.length > 0 && (
+                              {item.toppings && item.toppings.length > 0 && (
                                 <p className="text-[11px] text-[#3D2B1F]/60">Add on: {item.toppings.join(', ')}</p>
                               )}
                             </div>
@@ -2213,7 +2254,7 @@ function HomeScreen({
                     <span className="text-xs font-bold text-[#3D2B1F]">{order.timestamp.toLocaleDateString()}</span>
                   </div>
                   <div className="space-y-1 mb-3">
-                    {order.items.map((item, i) => (
+                    {order.items && Array.isArray(order.items) && order.items.filter(i => i && i.item).map((item, i) => (
                       <p key={i} className="text-sm text-[#3D2B1F]">{item.item.name} x{item.quantity}</p>
                     ))}
                   </div>
@@ -2255,7 +2296,7 @@ function HomeScreen({
                     <p className="text-xs text-[#3D2B1F]/60 mt-1">
                       {cartItem.quantity}x • Rp {cartItem.totalPrice.toLocaleString()}
                     </p>
-                    {cartItem.toppings.length > 0 && (
+                    {cartItem.toppings && cartItem.toppings.length > 0 && (
                       <p className="text-[10px] text-[#3D2B1F]/40 mt-1 truncate">
                         {cartItem.toppings.join(', ')}
                       </p>
@@ -2762,7 +2803,7 @@ function CheckoutScreen({ address, onAddressChange, paymentMethod, onPaymentMeth
                 <p className="font-serif font-bold text-[#3D2B1F]">{cartItem.item.name}</p>
                 {(!cartItem.item.categories.includes('Snack') || cartItem.item.name === 'Telur Gulung') && (
                   <div className="text-[11px] text-[#3D2B1F]/50 mt-1 space-y-0.5">
-                    {cartItem.toppings.length > 0 && (
+                    {cartItem.toppings && cartItem.toppings.length > 0 && (
                       <p>{cartItem.toppings.join(', ')} (+Rp {cartItem.toppings.reduce((acc: number, t: string) => acc + (toppingsPriceMap[t] || 0), 0).toLocaleString()})</p>
                     )}
                     {cartItem.notes && (
@@ -3216,7 +3257,7 @@ function OrdersScreen({ onBack, onGoHome, orders, cart, customerName }: { onBack
                             </div>
                           </div>
                           <div className="space-y-4">
-                            {order.items.map((item, idx) => (
+                            {order.items && Array.isArray(order.items) && order.items.filter(i => i && i.item).map((item, idx) => (
                               <div key={idx} className="flex justify-between items-start">
                                 <div className="flex-1">
                                   <p className="text-sm font-bold text-[#3D2B1F]">
