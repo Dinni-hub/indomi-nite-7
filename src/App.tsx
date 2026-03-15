@@ -292,14 +292,7 @@ export default function App() {
       const ordersRef = ref(database, 'orders');
       const recentOrdersQuery = query(ordersRef, limitToLast(1));
       
-      let initialLoad = true;
-      
       const unsubscribe = onChildAdded(recentOrdersQuery, (snapshot) => {
-        if (initialLoad) {
-          initialLoad = false;
-          return;
-        }
-        
         const orderData = snapshot.val();
         if (orderData.status === 'diterima') {
           setNewOrderAlert({

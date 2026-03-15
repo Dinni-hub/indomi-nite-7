@@ -15,10 +15,18 @@ async function startServer() {
   app.post("/api/send-email", async (req, res) => {
     const { subject, text, html } = req.body;
     console.log("Received email request. Subject:", subject);
-    console.log("Email user:", process.env.EMAIL_USER);
+    console.log("Email user (from env):", process.env.EMAIL_USER);
+    
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+      console.error("Missing EMAIL_USER or EMAIL_PASS");
+      return res.status(500).json({ success: false, error: "Missing email configuration" });
+    }
     
     const transporter = nodemailer.createTransport({
       service: "gmail",
+      host: "smtp.gmail.com",
+      port: 465,
+      secure: true,
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,
