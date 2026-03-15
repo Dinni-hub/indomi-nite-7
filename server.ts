@@ -14,6 +14,8 @@ async function startServer() {
   // Email API
   app.post("/api/send-email", async (req, res) => {
     const { subject, text, html } = req.body;
+    console.log("Received email request. Subject:", subject);
+    console.log("Email user:", process.env.EMAIL_USER);
     
     const transporter = nodemailer.createTransport({
       service: "gmail",
@@ -24,17 +26,18 @@ async function startServer() {
     });
 
     try {
-      await transporter.sendMail({
+      const info = await transporter.sendMail({
         from: process.env.EMAIL_USER,
         to: process.env.EMAIL_USER, // Send to owner
         subject,
         text,
         html,
       });
-      res.json({ success: true });
+      console.log("Email sent successfully:", info.messageId);
+      res.json({ success: true, messageId: info.messageId });
     } catch (error) {
-      console.error("Email error:", error);
-      res.status(500).json({ success: false, error: "Failed to send email" });
+      console.error("Email error details:", error);
+      res.status(500).json({ success: false, error: "Failed to send email", details: error instanceof Error ? error.message : String(error) });
     }
   });
 
