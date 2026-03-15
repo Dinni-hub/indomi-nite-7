@@ -18,7 +18,7 @@ import {
   Circle, ShoppingBag, Minus, Plus, QrCode, Banknote,
   Settings, Lock, Phone, Mail, HelpCircle, LogOut, Trash2, BellRing, Bird, Cookie,
   AlertTriangle, TrendingUp, BarChart3, ShoppingCart,
-  Package, Egg, Leaf, Box, Droplet, Sparkles, X, Coffee, Camera, Edit, Download, Pencil
+  Package, Egg, Leaf, Box, Droplet, Sparkles, X, Coffee, Camera, Edit, Download, Pencil, UploadCloud
 } from "lucide-react";
 import { BottomNav, NavItem } from "./components/BottomNav";
 
@@ -166,7 +166,7 @@ export default function App() {
         id: 2, 
         name: 'Telur', 
         stock: 42, 
-        unit: 'kg', 
+        unit: 'biji', 
         max: 100, 
         min: 1, 
         icon: 'Egg', 
@@ -238,6 +238,17 @@ export default function App() {
         icon: 'Droplet', 
         color: 'bg-orange-50 text-orange-500',
         imageUrl: 'https://raw.githubusercontent.com/Dinni-hub/manajemen-stok/main/INDOFOOD%20Sambal%20Pedas%20275ml%20ACCJKT.jpg'
+      },
+      { 
+        id: 9, 
+        name: 'Sosis', 
+        stock: 50, 
+        unit: 'pcs', 
+        max: 100, 
+        min: 10, 
+        icon: 'Egg', 
+        color: 'bg-red-100 text-red-600',
+        imageUrl: 'https://raw.githubusercontent.com/Dinni-hub/sosis/main/download%20(9).jpg'
       },
     ];
   });
@@ -399,7 +410,42 @@ export default function App() {
   }, [address]);
 
   useEffect(() => {
-    if (!isFirebaseConfigured) {
+    let inventoryChanged = false;
+    const newInventory = [...inventory];
+
+    const telurIdx = newInventory.findIndex(i => i.name === 'Telur' && i.unit === 'kg');
+    if (telurIdx > -1) {
+      newInventory[telurIdx].unit = 'biji';
+      inventoryChanged = true;
+    }
+
+    const sosisIdx = newInventory.findIndex(i => i.name === 'Sosis');
+    if (sosisIdx === -1) {
+      newInventory.push({ 
+        id: Date.now(), 
+        name: 'Sosis', 
+        stock: 50, 
+        unit: 'pcs', 
+        max: 100, 
+        min: 10, 
+        icon: 'Egg', 
+        color: 'bg-red-100 text-red-600',
+        imageUrl: 'https://raw.githubusercontent.com/Dinni-hub/sosis/main/download%20(9).jpg'
+      });
+      inventoryChanged = true;
+    } else if (!newInventory[sosisIdx].imageUrl) {
+      newInventory[sosisIdx].imageUrl = 'https://raw.githubusercontent.com/Dinni-hub/sosis/main/download%20(9).jpg';
+      inventoryChanged = true;
+    }
+
+    if (inventoryChanged) {
+      setInventory(newInventory);
+      if (isFirebaseConfigured) {
+        set(ref(database, 'inventory'), newInventory);
+      } else {
+        localStorage.setItem('app_inventory', JSON.stringify(newInventory));
+      }
+    } else if (!isFirebaseConfigured) {
       localStorage.setItem('app_inventory', JSON.stringify(inventory));
     }
   }, [inventory, isFirebaseConfigured]);
@@ -482,6 +528,10 @@ export default function App() {
             const idx = newInventory.findIndex(i => i.name === 'Caisim');
             if (idx > -1) newInventory[idx].stock = Math.max(0, newInventory[idx].stock - (0.1 * cartItem.quantity)); // Assume 100g per portion
           }
+          if (topping.includes('Sosis')) {
+            const idx = newInventory.findIndex(i => i.name === 'Sosis');
+            if (idx > -1) newInventory[idx].stock = Math.max(0, newInventory[idx].stock - cartItem.quantity);
+          }
         });
       }
 
@@ -531,7 +581,15 @@ export default function App() {
     combinedText += `Metode Pembayaran: ${paymentMethod}\n`;
     combinedText += `--------------------------------\n`;
 
-    // Real-time order notification is now handled via Firebase onChildAdded listener
+    fetch('/api/send-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        subject: `PESANAN BARU - INDOMI NITE - ${finalName}`,
+        text: combinedText,
+        html: combinedText.replace(/\n/g, '<br/>'),
+      }),
+    }).catch(console.error);
   };
 
   const handleCancelOrder = (orderId: string) => {
@@ -868,7 +926,14 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
 }
 
 function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, orders, onUpdateStock, onUpdateItem, onLogout, onSwitchToCustomer, onUpdateOrderStatus, onDeleteOrder, onEditOrder, setOrders, isFirebaseConfigured }: { inventory: any[], totalRevenue: number, revenueToday: number, totalOrders: number, orders: Order[], onUpdateStock: (id: number, stock: number) => void, onUpdateItem: (item: any) => void, onLogout: () => void, onSwitchToCustomer: () => void, onUpdateOrderStatus: (orderId: string, status: 'diterima' | 'dimasak' | 'diantar' | 'selesai') => void, onDeleteOrder: (orderId: string) => void, onEditOrder: (orderId: string, data: any) => void, setOrders: React.Dispatch<React.SetStateAction<Order[]>>, isFirebaseConfigured: boolean }) {
-  const [activeTab, setActiveTab] = useState<'beranda' | 'laporan' | 'stok' | 'pengaturan'>('beranda');
+  const [activeTab, setActiveTab] = useState<'beranda' | 'laporan' | 'stok' | 'pengaturan'>(() => {
+    return (localStorage.getItem('owner_active_tab') as any) || 'beranda';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('owner_active_tab', activeTab);
+  }, [activeTab]);
+
   const [viewDetail, setViewDetail] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<any | null>(null);
@@ -877,6 +942,7 @@ function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, order
   const [isResettingData, setIsResettingData] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [editingStocks, setEditingStocks] = useState<{[id: number]: string}>({});
 
   const handleShareWhatsApp = (order: Order) => {
     const text = encodeURIComponent(generateReceiptText(order));
@@ -1151,12 +1217,6 @@ function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, order
           <p className="opacity-70 mt-0.5">Pastikan semua Secrets (API Key, URL, dll) sudah diisi dengan benar di menu Settings.</p>
         </div>
       )}
-      {isFirebaseConfigured && (!orders || orders.length === 0) && (
-        <div className="bg-amber-500 text-white px-6 py-2 text-[10px] font-bold text-center uppercase tracking-widest z-50">
-          <p>Terhubung ke Firebase (Database Kosong)</p>
-          <p className="opacity-70 mt-0.5">Pesanan lama di browser ini tidak otomatis pindah ke Firebase. Coba buat pesanan baru!</p>
-        </div>
-      )}
       {/* Header */}
       <div className="px-6 pt-6 pb-4 flex items-center justify-between bg-white shadow-sm z-10 relative">
         <button 
@@ -1323,6 +1383,21 @@ function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, order
                   <Utensils size={20} />
                   <span className="font-bold text-sm">Mode Pelanggan</span>
                 </button>
+
+                {/* Sync Button if Firebase is connected and local orders exist */}
+                {isFirebaseConfigured && localStorage.getItem('app_orders') && (
+                  <button 
+                    onClick={() => {
+                      setIsMenuOpen(false);
+                      handleSyncLocalOrders();
+                    }}
+                    disabled={isSyncing}
+                    className="w-full p-4 rounded-xl flex items-center gap-4 transition-all text-amber-600 hover:bg-amber-50 mt-2"
+                  >
+                    <UploadCloud size={20} />
+                    <span className="font-bold text-sm">{isSyncing ? 'Memindahkan...' : 'Pindahkan Data Lama'}</span>
+                  </button>
+                )}
               </div>
 
               <div className="pt-6 border-t border-[#3D2B1F]/10">
@@ -1357,8 +1432,8 @@ function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, order
               </div>
             </div>
 
-            {/* Sync Button if Firebase is connected but empty and local orders exist */}
-            {isFirebaseConfigured && (!orders || orders.length === 0) && localStorage.getItem('app_orders') && (
+            {/* Sync Button if Firebase is connected and local orders exist */}
+            {isFirebaseConfigured && localStorage.getItem('app_orders') && (
               <div className="mb-8 p-6 bg-amber-50 rounded-[2rem] border border-amber-200">
                 <p className="text-xs font-bold text-amber-800 mb-2">Pindahkan Pesanan Lokal?</p>
                 <p className="text-[10px] text-amber-700/70 mb-4 leading-relaxed">
@@ -1691,20 +1766,42 @@ function OwnerScreen({ inventory, totalRevenue, revenueToday, totalOrders, order
                     </div>
                     <div className="flex items-center gap-3">
                       <button 
-                        onClick={() => onUpdateStock(item.id, Math.max(0, item.stock - 1))}
+                        onClick={() => onUpdateStock(item.id, Math.max(0, (Number(item.stock) || 0) - 1))}
                         className="h-8 w-8 rounded-full bg-[#3D2B1F]/5 flex items-center justify-center text-[#3D2B1F] hover:bg-[#3D2B1F]/10"
                       >
                         <Minus size={16} />
                       </button>
                       <input 
                         type="number"
-                        value={item.stock}
-                        onChange={(e) => onUpdateStock(item.id, parseFloat(e.target.value) || 0)}
+                        step="any"
+                        value={editingStocks[item.id] !== undefined ? editingStocks[item.id] : item.stock}
+                        onChange={(e) => {
+                          let val = e.target.value;
+                          if (val.length > 1 && val.startsWith('0') && !val.startsWith('0.')) {
+                            val = val.replace(/^0+/, '');
+                            if (val === '') val = '0';
+                          }
+                          setEditingStocks(prev => ({...prev, [item.id]: val}));
+                          
+                          const num = parseFloat(val);
+                          if (!isNaN(num)) {
+                            onUpdateStock(item.id, num);
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const val = parseFloat(e.target.value);
+                          onUpdateStock(item.id, isNaN(val) ? 0 : val);
+                          setEditingStocks(prev => {
+                            const next = {...prev};
+                            delete next[item.id];
+                            return next;
+                          });
+                        }}
                         className="w-16 text-center font-bold text-[#3D2B1F] text-sm bg-[#F5F2EA] rounded-lg py-1"
                       />
                       <span className="text-xs font-bold text-[#3D2B1F]/40">{item.unit}</span>
                       <button 
-                        onClick={() => onUpdateStock(item.id, item.stock + 1)}
+                        onClick={() => onUpdateStock(item.id, (Number(item.stock) || 0) + 1)}
                         className="h-8 w-8 rounded-full bg-[#3D2B1F] text-white flex items-center justify-center hover:bg-black"
                       >
                         <Plus size={16} />
@@ -2942,6 +3039,7 @@ function DetailScreen({ item, onBack, onAddToCart, onBuyNow }: { item: any, onBa
       ]
     : [
         { name: 'Telur Rebus', price: 3000 },
+        { name: 'Sosis', price: 1000 },
       ];
 
   const isSnack = item.categories.includes('Snack');
