@@ -88,6 +88,9 @@ export default function App() {
   const [view, setView] = useState<View>(() => {
     try {
       const saved = localStorage.getItem('app_view');
+      // If user is owner, they can go to owner view, otherwise default to home
+      const userRole = localStorage.getItem('app_userRole');
+      if (saved === 'owner' && userRole !== 'owner') return 'home';
       if (saved && ['welcome', 'home', 'detail', 'checkout', 'orders', 'owner'].includes(saved)) {
         return saved as View;
       }
@@ -298,7 +301,6 @@ export default function App() {
         }
         
         const orderData = snapshot.val();
-        // Only alert if it's a new order (status 'diterima')
         if (orderData.status === 'diterima') {
           setNewOrderAlert({
             customerName: orderData.customerName,
@@ -309,7 +311,7 @@ export default function App() {
           try {
             const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
             audio.loop = true;
-            audio.play();
+            audio.play().catch(e => console.log("Audio play blocked", e));
             (window as any)._orderAudio = audio;
           } catch (e) {
             console.log("Audio play failed", e);
@@ -747,6 +749,8 @@ export default function App() {
                     setNewOrderAlert(null);
                     if ((window as any)._orderAudio) {
                       (window as any)._orderAudio.pause();
+                      (window as any)._orderAudio.currentTime = 0;
+                      (window as any)._orderAudio = null;
                     }
                   }}
                   className="w-full bg-[#3D2B1F] text-white py-4 rounded-2xl font-bold text-lg shadow-xl active:scale-95 transition-all"
